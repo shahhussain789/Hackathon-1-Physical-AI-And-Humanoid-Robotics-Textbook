@@ -1,0 +1,494 @@
+---
+title: Synthetic Data Generation for AI Training
+sidebar_label: Synthetic Data Generation
+sidebar_position: 4
+description: Generate massive labeled datasets using domain randomization in Isaac Sim to train robust perception models for humanoid robots.
+keywords: [synthetic data, domain randomization, ai training, computer vision, isaac sim, dataset generation]
+tags: [module3, synthetic-data, ai-training]
+---
+
+# Synthetic Data Generation for AI Training
+
+## Introduction
+
+**The Data Problem**: Training robust AI models requires millions of labeled images. Manual labeling is:
+- **Expensive**: $0.10-$1.00 per image
+- **Slow**: Weeks to months for large datasets
+- **Limited diversity**: Hard to capture all edge cases
+
+**The Solution**: Generate infinite perfectly-labeled synthetic data in Isaac Sim.
+
+## Why Synthetic Data?
+
+### Real vs. Synthetic Data
+
+| Aspect | Real Data | Synthetic Data |
+|--------|-----------|----------------|
+| **Cost** | High ($$$) | Low (compute only) |
+| **Labeling** | Manual, error-prone | Automatic, perfect |
+| **Diversity** | Limited scenarios | Infinite variations |
+| **Edge Cases** | Rare, hard to capture | Easily generated |
+| **Privacy** | Concerns (faces, etc.) | None (virtual) |
+| **Speed** | Days-weeks | Hours |
+
+### Success Stories
+
+**NVIDIA Research**:
+- **DriveNet**: 90% of training data synthetic → production self-driving
+- **DexNet**: 6.7M synthetic grasps → 99% grasp success
+- **Isaac Sim**: Used to train warehouse robots (no real data needed)
+
+## Domain Randomization
+
+### Core Concept
+
+**Idea**: Randomize simulation parameters so model learns robust features, not simulation artifacts.
+
+**Randomize**:
+1. **Lighting**: Intensity, color, position
+2. **Textures**: Object materials, colors
+3. **Geometry**: Object positions, orientations
+4. **Camera**: FOV, noise, distortion
+5. **Physics**: Mass, friction
+
+**Result**: Model trained on randomized sim data generalizes to real world.
+
+### The Domain Randomization Loop
+
+```
+┌────────────────────────────────────────────┐
+│  1. Randomize Scene Parameters             │
+│     (lights, textures, positions)          │
+└────────────┬───────────────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────────────┐
+│  2. Render Frame with Annotations          │
+│     (RGB + bounding boxes + segmentation)  │
+└────────────┬───────────────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────────────┐
+│  3. Save to Dataset                        │
+│     image_001.png, labels_001.json         │
+└────────────┬───────────────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────────────┐
+│  4. Repeat 100,000 times                   │
+└────────────────────────────────────────────┘
+```
+
+## Implementing Domain Randomization
+
+### Setup: Object Detection Dataset
+
+**Goal**: Train humanoid to detect and localize household objects (chairs, tables, mugs).
+
+### Step 1: Create Randomization Config
+
+```python
+import random
+import numpy as np
+
+class RandomizationConfig:
+    """Parameters for domain randomization."""
+
+    # Lighting randomization
+    light_intensity_range = (500, 5000)
+    light_color_range = [(0.8, 0.8, 1.0), (1.0, 0.9, 0.8)]  # Cool to warm
+
+    # Object randomization
+    num_objects_range = (5, 20)
+    object_scale_range = (0.5, 1.5)
+    object_position_range = {
+        'x': (-3, 3),
+        'y': (-3, 3),
+        'z': (0, 1.5)
+    }
+
+    # Texture randomization
+    texture_hue_shift = 0.3  # ±30% hue variation
+
+    # Camera randomization
+    camera_fov_range = (60, 90)
+    camera_noise_stddev = 0.02  # Gaussian noise
+```
+
+### Step 2: Scene Randomization Function
+
+```python
+from omni.isaac.core import World
+from pxr import UsdGeom, Gf
+
+def randomize_scene(world, config):
+    """Randomize all scene parameters."""
+
+    # 1. Randomize lighting
+    dome_light = UsdLux.DomeLight.Get(world.stage, "/World/DomeLight")
+    intensity = random.uniform(*config.light_intensity_range)
+    dome_light.CreateIntensityAttr(intensity)
+
+    color_idx = random.randint(0, len(config.light_color_range) - 1)
+    color = config.light_color_range[color_idx]
+    dome_light.CreateColorAttr(Gf.Vec3f(*color))
+
+    # 2. Randomize object positions
+    objects = world.scene.get_objects()
+    for obj_name in objects:
+        if "furniture" in obj_name:
+            obj = world.scene.get_object(obj_name)
+
+            # Random position
+            x = random.uniform(*config.object_position_range['x'])
+            y = random.uniform(*config.object_position_range['y'])
+            z = random.uniform(*config.object_position_range['z'])
+            obj.set_world_pose(position=[x, y, z])
+
+            # Random rotation
+            yaw = random.uniform(0, 2 * np.pi)
+            obj.set_world_pose(orientation=[0, 0, np.sin(yaw/2), np.cos(yaw/2)])
+
+            # Random scale
+            scale = random.uniform(*config.object_scale_range)
+            obj.set_local_scale([scale, scale, scale])
+
+    # 3. Randomize textures
+    for obj_name in objects:
+        if "furniture" in obj_name:
+            obj = world.scene.get_object(obj_name)
+            hue_shift = random.uniform(-config.texture_hue_shift, config.texture_hue_shift)
+            # Apply hue shift to material (implementation omitted for brevity)
+
+    # 4. Randomize camera
+    camera = UsdGeom.Camera.Get(world.stage, "/World/Camera")
+    fov = random.uniform(*config.camera_fov_range)
+    camera.CreateFocalLengthAttr(fov_to_focal_length(fov))
+```
+
+### Step 3: Annotated Data Capture
+
+**Replicator API** (NVIDIA's synthetic data generation tool):
+```python
+import omni.replicator.core as rep
+
+# Define camera for rendering
+camera = rep.create.camera(position=(3, 3, 2), look_at=(0, 0, 0.5))
+
+# Define rendering output with annotations
+render_product = rep.create.render_product(camera, resolution=(1024, 1024))
+
+# Attach writers (save to disk)
+writer = rep.WriterRegistry.get("BasicWriter")
+writer.initialize(
+    output_dir="./dataset",
+    rgb=True,
+    bounding_box_2d_tight=True,  # Object detection labels
+    semantic_segmentation=True,   # Pixel-wise labels
+    instance_segmentation=True
+)
+writer.attach(render_product)
+
+# Generate dataset
+with rep.trigger.on_frame(num_frames=10000):
+    # Randomize before each frame
+    randomize_scene(world, RandomizationConfig())
+
+    # Render and save
+    rep.orchestrator.step()
+```
+
+**Output Structure**:
+```
+dataset/
+├── rgb/
+│   ├── 0000.png
+│   ├── 0001.png
+│   └── ...
+├── bounding_box_2d_tight/
+│   ├── 0000.json
+│   └── ...
+├── semantic_segmentation/
+│   ├── 0000.png  # Per-pixel class labels
+│   └── ...
+└── instance_segmentation/
+    ├── 0000.png  # Per-instance labels
+    └── ...
+```
+
+### Step 4: Label Format (COCO JSON)
+
+**Bounding Box JSON** (`0000.json`):
+```json
+{
+  "image_id": 0,
+  "width": 1024,
+  "height": 1024,
+  "objects": [
+    {
+      "class": "chair",
+      "bbox": [120, 340, 200, 180],  # [x, y, w, h]
+      "confidence": 1.0
+    },
+    {
+      "class": "table",
+      "bbox": [450, 280, 350, 250]
+    }
+  ]
+}
+```
+
+## Advanced Randomization Techniques
+
+### 1. Procedural Asset Generation
+
+**Random Chair Generator**:
+```python
+import random
+
+def generate_random_chair(world, name):
+    """Procedurally generate chair with random dimensions."""
+
+    # Random dimensions
+    seat_height = random.uniform(0.4, 0.5)
+    seat_width = random.uniform(0.35, 0.45)
+    backrest_height = random.uniform(0.3, 0.5)
+
+    # Create seat
+    seat = DynamicCuboid(
+        prim_path=f"/World/Chairs/{name}/seat",
+        position=[0, 0, seat_height],
+        size=[seat_width, seat_width, 0.05],
+        color=[random.random(), random.random(), random.random()]
+    )
+
+    # Create backrest
+    backrest = DynamicCuboid(
+        prim_path=f"/World/Chairs/{name}/backrest",
+        position=[0, -seat_width/2, seat_height + backrest_height/2],
+        size=[seat_width, 0.05, backrest_height],
+        color=seat.get_color()  # Match seat
+    )
+
+    # Create 4 legs
+    for i in range(4):
+        x_offset = seat_width/2 * (1 if i % 2 == 0 else -1)
+        y_offset = seat_width/2 * (1 if i < 2 else -1)
+
+        leg = DynamicCuboid(
+            prim_path=f"/World/Chairs/{name}/leg_{i}",
+            position=[x_offset, y_offset, seat_height/2],
+            size=[0.05, 0.05, seat_height],
+            color=seat.get_color()
+        )
+
+    return seat  # Return reference
+```
+
+### 2. Background Randomization
+
+**Random HDRI Skybox**:
+```python
+hdri_paths = [
+    "omniverse://library/hdri/indoor_office.hdr",
+    "omniverse://library/hdri/warehouse.hdr",
+    "omniverse://library/hdri/apartment_bright.hdr",
+    "omniverse://library/hdri/studio_neutral.hdr"
+]
+
+def randomize_background(world):
+    """Change environment HDRI."""
+    dome_light = UsdLux.DomeLight.Get(world.stage, "/World/DomeLight")
+    hdri = random.choice(hdri_paths)
+    dome_light.CreateTextureFileAttr(hdri)
+```
+
+### 3. Physics Randomization
+
+**Randomize Object Masses**:
+```python
+from pxr import UsdPhysics
+
+def randomize_physics(world):
+    """Randomize mass and friction."""
+    objects = world.scene.get_objects()
+
+    for obj_name in objects:
+        obj = world.scene.get_object(obj_name)
+        prim = world.stage.GetPrimAtPath(obj.prim_path)
+
+        # Random mass (±30%)
+        mass_api = UsdPhysics.MassAPI.Apply(prim)
+        base_mass = mass_api.GetMassAttr().Get()
+        new_mass = base_mass * random.uniform(0.7, 1.3)
+        mass_api.CreateMassAttr(new_mass)
+
+        # Random friction
+        material = UsdPhysics.MaterialAPI.Apply(prim)
+        friction = random.uniform(0.3, 0.9)
+        material.CreateStaticFrictionAttr(friction)
+```
+
+## Humanoid-Specific Data Generation
+
+### First-Person View Dataset
+
+**Mount Camera on Robot Head**:
+```python
+# Attach camera to humanoid head link
+camera_path = "/World/Humanoid/head/camera"
+camera = rep.create.camera(
+    parent="/World/Humanoid/head",
+    position=[0.05, 0, 0.15],  # 5cm forward, 15cm up from head
+    look_at_offset=[1, 0, 0]   # Look forward
+)
+
+# Walk humanoid through environment while recording
+for step in range(5000):
+    # Apply walking controller (from Module 2)
+    humanoid.apply_walking_gait()
+
+    # Randomize scene every 50 frames
+    if step % 50 == 0:
+        randomize_scene(world, config)
+
+    # Capture frame
+    world.step(render=True)
+    rep.orchestrator.step()
+```
+
+**Result**: First-person dataset of humanoid navigating cluttered environments.
+
+### Object Interaction Dataset
+
+**Grasping Poses**:
+```python
+def generate_grasp_dataset(num_samples=10000):
+    """Generate images of humanoid grasping objects."""
+
+    for i in range(num_samples):
+        # Randomize object
+        obj = spawn_random_object()
+
+        # IK: Move hand to grasp position
+        grasp_pose = compute_grasp_pose(obj)
+        humanoid.move_hand_to(grasp_pose)
+
+        # Randomize scene
+        randomize_scene(world, config)
+
+        # Capture with labels: gripper pose, object class
+        world.step(render=True)
+        save_grasp_annotation(grasp_pose, obj.class_name)
+```
+
+## Dataset Quality Checks
+
+### Validation Checklist
+
+Before training, verify dataset quality:
+
+- [ ] **Label accuracy**: Spot-check 100 random samples
+- [ ] **Diversity**: All object classes well-represented (no class imbalance)
+- [ ] **Realism**: Images visually similar to real-world target environment
+- [ ] **Edge cases**: Includes occlusions, poor lighting, extreme angles
+- [ ] **Format**: Labels in correct format (COCO, YOLO, etc.)
+
+### Measuring Diversity
+
+**Hue Histogram**:
+```python
+import cv2
+import matplotlib.pyplot as plt
+
+def check_color_diversity(image_folder):
+    """Plot hue distribution of dataset."""
+    hues = []
+    for img_path in os.listdir(image_folder):
+        img = cv2.imread(img_path)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        hues.extend(hsv[:, :, 0].flatten())
+
+    plt.hist(hues, bins=180)
+    plt.title("Hue Distribution (should be uniform)")
+    plt.show()
+```
+
+**Good**: Uniform distribution → diverse colors
+**Bad**: Spikes → limited texture variation
+
+## Training on Synthetic Data
+
+### Example: YOLOv8 Object Detection
+
+```bash
+# Install YOLOv8
+pip install ultralytics
+
+# Convert Isaac Sim format to YOLO format
+python scripts/convert_to_yolo.py --input ./dataset --output ./yolo_dataset
+
+# Train
+yolo train \
+  data=yolo_dataset/data.yaml \
+  model=yolov8n.pt \
+  epochs=100 \
+  imgsz=640 \
+  batch=16
+```
+
+**Result**: Model trained 100% on synthetic data, ready for real-world testing.
+
+## Sim-to-Real Gap Mitigation
+
+### Strategies
+
+1. **Photorealism**: RTX rendering reduces visual gap
+2. **Randomization**: Broad distribution → robust features
+3. **Real-world fine-tuning**: Train on synthetic, fine-tune on 10% real data
+4. **Style transfer**: Apply real-world textures to synthetic scenes
+
+### Measuring Sim-to-Real Transfer
+
+**Benchmark**: Train on synthetic, test on real data.
+
+| Model | Synthetic Train | Real Test (mAP) |
+|-------|-----------------|-----------------|
+| Baseline (real data only) | - | 0.85 |
+| **Synthetic only** | 100k images | 0.72 |
+| **Synthetic + 1k real** | 100k + 1k | 0.83 |
+
+**Target**: &gt;85% of real-only performance is excellent.
+
+## Summary
+
+Synthetic data generation enables:
+- **Infinite data**: Generate millions of labeled images
+- **Perfect labels**: Automatic bounding boxes, segmentation
+- **Domain randomization**: Robust models via diverse training
+- **Cost-effective**: Avoid expensive manual labeling
+
+**Next**: Deploy trained models on real hardware with Isaac ROS!
+
+---
+
+:::tip Key Takeaways
+- **Synthetic Data**: Infinite, perfectly labeled, cost-effective
+- **Domain Randomization**: Vary lights, textures, geometry → robust models
+- **Replicator API**: NVIDIA tool for automated data generation
+- **Humanoid-Specific**: First-person views, grasping datasets
+- **Sim-to-Real**: Photorealism + randomization → minimal gap
+:::
+
+## Exercises
+
+1. **Generate 1,000 Images**: Use Replicator to create object detection dataset
+2. **Diversity Check**: Measure color/lighting diversity in your dataset
+3. **Train YOLO**: Train object detector on synthetic data
+4. **Sim-to-Real**: Test trained model on real images, measure accuracy drop
+
+## Further Reading
+
+- [NVIDIA Replicator Documentation](https://docs.omniverse.nvidia.com/extensions/latest/ext_replicator.html)
+- ["Domain Randomization for Transferring Deep Neural Networks" (Tobin et al., 2017)](https://arxiv.org/abs/1703.06907)
+- [NVIDIA Isaac Sim Synthetic Data Tutorial](https://docs.omniverse.nvidia.com/isaacsim/latest/replicator_tutorials/index.html)

@@ -1,0 +1,171 @@
+---
+id: index
+title: Module 2 - Humanoid Control Fundamentals
+sidebar_label: Overview
+sidebar_position: 0
+description: Learn the mathematical and computational foundations of robot control - kinematics, dynamics, and control algorithms for humanoid robots.
+keywords: [robot kinematics, inverse kinematics, dynamics, control theory, pid, gazebo, simulation]
+---
+
+# Module 2: Humanoid Control Fundamentals
+
+## From Theory to Motion
+
+How does a robot arm know where its hand is in 3D space? How do you command it to reach a specific point? How do you ensure smooth, stable motion without oscillations or overshooting?
+
+Welcome to **Module 2**, where we dive into the mathematical and computational foundations that enable robots to move with precision and grace.
+
+## What You'll Learn
+
+This module bridges the gap between high-level AI (Module 1) and low-level motor control. You'll master the tools to:
+
+- **Calculate where robot parts are** (forward kinematics)
+- **Plan how to get robot parts where you want them** (inverse kinematics)
+- **Understand forces and torques** (dynamics)
+- **Design controllers** that execute smooth, accurate motion
+- **Simulate and test** in Gazebo and NVIDIA Isaac Sim before touching real hardware
+
+### Learning Objectives
+
+By the end of this module, you will be able to:
+
+✅ **Compute forward kinematics** for serial manipulators and humanoid limbs
+✅ **Solve inverse kinematics** problems analytically and numerically
+✅ **Model robot dynamics** using Lagrangian mechanics or Newton-Euler formulation
+✅ **Implement PID controllers** for position and velocity control
+✅ **Set up and run** Gazebo simulations with ROS 2 integration
+✅ **Use NVIDIA Isaac Sim** for GPU-accelerated physics and AI training
+
+## Module Structure
+
+### Chapter 1: Robot Kinematics
+Learn the math of motion without considering forces. Map joint angles to end-effector positions using transformation matrices and the Denavit-Hartenberg convention.
+
+**Key Concepts**: Coordinate frames, homogeneous transforms, DH parameters, forward kinematics
+
+### Chapter 2: Inverse Kinematics
+Given a desired end-effector position, solve for the joint angles needed to reach it. Explore analytical solutions for simple arms and numerical methods for complex humanoids.
+
+**Key Concepts**: Geometric solutions, Jacobian-based methods, optimization, singularities
+
+### Chapter 3: Robot Dynamics
+Understand how forces and torques cause motion. Derive equations of motion and learn how mass, inertia, and gravity affect robot behavior.
+
+**Key Concepts**: Newton-Euler formulation, Lagrangian mechanics, joint torques, contact forces
+
+### Chapter 4: Control Theory for Robotics
+Design controllers that make robots follow desired trajectories smoothly and accurately. Start with PID, then explore model predictive control and impedance control.
+
+**Key Concepts**: PID tuning, feedforward control, MPC, compliance control
+
+### Chapter 5: Simulation Environments
+Set up Gazebo and NVIDIA Isaac Sim for testing robot algorithms. Learn to create URDF models, configure physics, and bridge simulation to ROS 2.
+
+**Key Concepts**: Gazebo world files, URDF/SDF, physics engines, sensor plugins, ROS 2 integration
+
+### Chapter 6: Simulating Humanoid Motion
+Put it all together: create a humanoid model, implement a walking controller, and test in simulation. Analyze results and debug common issues.
+
+**Key Concepts**: Bipedal gait, ZMP preview control, whole-body coordination, sim-to-real validation
+
+## Prerequisites
+
+### Mathematical Background
+
+You should be comfortable with:
+
+- **Linear Algebra**: Vectors, matrices, matrix multiplication, inverses
+- **Trigonometry**: sin, cos, tan, and their applications in 2D/3D geometry
+- **Calculus**: Derivatives (for velocity, acceleration), integrals (less critical)
+- **Physics**: Newton's laws (F=ma, torque=Iα), conservation of energy
+
+:::tip Math Refresher Available
+If you need to brush up on linear algebra or calculus, see **Resources > Math Refreshers** for quick reference guides.
+:::
+
+### Programming Skills
+
+- **Python 3**: Comfortable with NumPy for numerical computation
+- **Basic ROS 2**: Completed Module 1's tools overview
+- **Command line**: Ability to run scripts and manage files
+
+### Hardware/Software
+
+- **Computer**: Modern laptop/desktop (4GB+ RAM, GPU optional but helpful for Isaac Sim)
+- **OS**: Ubuntu 22.04 (or WSL2 on Windows), macOS (ROS 2 limited support)
+- **Installed**:
+  - ROS 2 Humble
+  - Gazebo Classic 11 (or Gazebo Harmonic)
+  - Python 3.10+ with NumPy, SciPy, Matplotlib
+
+See **Resources > Environment Setup** for installation instructions.
+
+## Module Philosophy: Hands-On Learning
+
+This module is **code-first**. Every concept is accompanied by:
+
+- **Python code examples**: Implement kinematics, controllers from scratch
+- **ROS 2 demos**: Control simulated robots
+- **Gazebo simulations**: Visualize and test algorithms
+- **Exercises**: Apply concepts to new scenarios
+
+**You won't just read about kinematics—you'll write the code.**
+
+## Estimated Time Commitment
+
+- **Total**: 16 hours
+- **Reading & theory**: 8 hours
+- **Coding & simulations**: 6 hours
+- **Exercises**: 2 hours
+
+**Recommendation**: Spread over 2-3 weeks for thorough understanding.
+
+## How to Navigate This Module
+
+### Sequential Path (Recommended for Beginners)
+
+Follow chapters 1 → 6 in order. Each chapter builds on previous concepts.
+
+### Targeted Learning (If You Have Background)
+
+- **Need kinematics only?** Chapters 1-2
+- **Focus on control?** Chapters 3-4
+- **Just want simulation setup?** Chapters 5-6
+
+### Practical First (Learn by Doing)
+
+1. Start with Chapter 5 (set up Gazebo)
+2. Play with a pre-built robot model
+3. Return to Chapters 1-4 to understand the math
+4. Apply to Chapter 6 case study
+
+## Module Outcomes
+
+After completing this module, you'll be able to:
+
+- **Analyze** any serial manipulator or humanoid limb mathematically
+- **Design** controllers for precise motion tracking
+- **Simulate** robot behaviors before deploying to hardware
+- **Debug** control issues using ROS 2 tools and visualization
+- **Transition** smoothly to Module 3 (Perception) and Module 4 (AI for Locomotion)
+
+## Getting Started
+
+Ready to dive into robot control? Click **Next** to begin Chapter 1: Robot Kinematics, where we'll answer the question: "Where is my robot's hand in 3D space?"
+
+:::info Module Resources
+- **Code Examples**: `/code-examples/module2/` in the repository
+- **URDF Models**: `/static/models/` for humanoid and arm models
+- **Cheat Sheets**: Quick reference for DH parameters, transformation matrices
+:::
+
+---
+
+## What's Next?
+
+After Module 2, you'll proceed to:
+
+- **Module 3**: Perception & Sensor Fusion (cameras, LiDAR, SLAM)
+- **Module 4**: AI for Locomotion & Manipulation (RL, whole-body control)
+
+Let's build the foundation for precise robot control! 🤖

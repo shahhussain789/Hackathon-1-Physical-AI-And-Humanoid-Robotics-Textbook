@@ -1,0 +1,12 @@
+{
+  "label": "Module 4: Vision-Language-Action (VLA)",
+  "position": 5,
+  "collapsible": true,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Module 4: Vision-Language-Action",
+    "description": "Master the convergence of LLMs and robotics - from voice commands to cognitive planning and autonomous manipulation.",
+    "keywords": ["vla", "llm", "voice commands", "whisper", "cognitive planning", "multimodal ai", "autonomous humanoid"]
+  }
+}

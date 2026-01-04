@@ -1,0 +1,21 @@
+{
+  "label": "Module 2: Humanoid Control Fundamentals",
+  "position": 3,
+  "collapsed": false,
+  "link": {
+    "type": "doc",
+    "id": "module2/index"
+  },
+  "customProps": {
+    "description": "Master the fundamentals of robot control - from kinematics and dynamics to PID controllers and simulation environments",
+    "estimatedHours": 16,
+    "prerequisites": ["Module 1", "Linear algebra (vectors, matrices)", "Basic calculus (derivatives)", "Physics (Newton's laws)"],
+    "learningObjectives": [
+      "Apply forward and inverse kinematics to humanoid robot arms and legs",
+      "Understand robot dynamics and how physical laws constrain motion",
+      "Design and implement PID and model predictive controllers",
+      "Simulate humanoid robots in Gazebo and NVIDIA Isaac Sim",
+      "Analyze and debug control systems using ROS 2 tools"
+    ]
+  }
+}

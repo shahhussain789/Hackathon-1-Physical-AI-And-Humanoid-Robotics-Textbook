@@ -1,0 +1,585 @@
+---
+title: Nav2 for Humanoid Path Planning
+sidebar_label: Nav2 for Humanoids
+sidebar_position: 7
+description: Configure ROS 2 Nav2 for autonomous navigation on bipedal humanoid robots with custom footstep planning and stability constraints.
+keywords: [nav2, path planning, humanoid navigation, bipedal locomotion, ros2 navigation, footstep planning]
+tags: [module3, nav2, navigation, path-planning]
+---
+
+# Nav2 for Humanoid Path Planning
+
+## Introduction
+
+**Nav2** (Navigation2) is the ROS 2 navigation stack—providing autonomous navigation capabilities for mobile robots.
+
+**Challenge**: Nav2 is designed for wheeled robots. Humanoids need **special considerations**:
+- Bipedal stability (can't turn in place instantly)
+- Footstep planning (discrete foot placements)
+- Kinematic constraints (limited step length)
+- Balance during motion
+
+This chapter adapts Nav2 for humanoid robotics.
+
+## Nav2 Architecture
+
+### Core Components
+
+```
+┌──────────────────────────────────────────────┐
+│           Nav2 Navigation Stack              │
+├──────────────────────────────────────────────┤
+│                                              │
+│  ┌────────────┐  ┌────────────┐  ┌────────┐ │
+│  │   Planner  │→ │ Controller │→ │ Action │ │
+│  │            │  │            │  │ Server │ │
+│  │ (Global)   │  │ (Local)    │  │        │ │
+│  └────────────┘  └────────────┘  └────────┘ │
+│        │               │              │      │
+│        ▼               ▼              ▼      │
+│  ┌────────────────────────────────────────┐ │
+│  │         Costmap (Obstacles)            │ │
+│  └────────────────────────────────────────┘ │
+│                    │                         │
+│                    ▼                         │
+│  ┌────────────────────────────────────────┐ │
+│  │    Sensors (Lidar, Camera, VSLAM)     │ │
+│  └────────────────────────────────────────┘ │
+└──────────────────────────────────────────────┘
+```
+
+**Flow**:
+1. **Goal**: User sets navigation goal (x, y, θ)
+2. **Planner**: Computes global path (A*, Dijkstra)
+3. **Controller**: Follows path with local obstacle avoidance (DWA, TEB)
+4. **Costmap**: Maintains obstacle map from sensors
+5. **Recovery**: Handles failures (stuck, collisions)
+
+## Installation
+
+```bash
+# Nav2 already in ROS 2 Humble
+sudo apt install ros-humble-navigation2 ros-humble-nav2-bringup
+```
+
+**Verify**:
+```bash
+ros2 pkg list | grep nav2
+```
+
+## Basic Nav2 Setup (Wheeled Robot Baseline)
+
+### Step 1: Create Costmap Configuration
+
+**`costmap_common_params.yaml`**:
+```yaml
+costmap_common:
+  ros__parameters:
+    footprint: "[[0.15, 0.15], [0.15, -0.15], [-0.15, -0.15], [-0.15, 0.15]]"
+    robot_radius: 0.22  # Circle enclosing robot
+
+    obstacle_layer:
+      enabled: true
+      observation_sources: scan
+      scan:
+        topic: /scan
+        sensor_frame: lidar_link
+        data_type: LaserScan
+        marking: true
+        clearing: true
+        max_obstacle_height: 2.0
+        min_obstacle_height: 0.0
+
+    inflation_layer:
+      enabled: true
+      inflation_radius: 0.55
+      cost_scaling_factor: 3.0
+```
+
+**Key Parameters**:
+- `footprint`: Robot outline (for humanoid: foot dimensions)
+- `obstacle_layer`: Sensors feeding obstacle data
+- `inflation_layer`: Safety margin around obstacles
+
+### Step 2: Planner Configuration
+
+**`planner_params.yaml`**:
+```yaml
+planner_server:
+  ros__parameters:
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: true  # A* algorithm
+      allow_unknown: true
+```
+
+### Step 3: Controller Configuration
+
+**`controller_params.yaml`**:
+```yaml
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    controller_plugins: ["FollowPath"]
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      min_vel_x: 0.0
+      max_vel_x: 0.26  # Max forward speed (m/s)
+      min_vel_y: 0.0
+      max_vel_y: 0.0   # Non-holonomic (no lateral movement)
+      max_vel_theta: 1.0  # Max rotation speed (rad/s)
+      min_speed_xy: 0.0
+      max_speed_xy: 0.26
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+```
+
+### Step 4: Launch Nav2
+
+```bash
+ros2 launch nav2_bringup navigation_launch.py \
+  params_file:=my_nav2_params.yaml
+```
+
+**Result**: Nav2 running, waiting for goal.
+
+## Adapting Nav2 for Humanoids
+
+### Challenge 1: Footprint (Two Feet)
+
+**Wheeled Robot**: Single circular/rectangular footprint.
+
+**Humanoid**: Two separate feet → dual support / single support.
+
+**Solution**: Use **conservative footprint** (union of both feet).
+
+```yaml
+footprint: "[[0.1, 0.05], [0.1, -0.05], [-0.1, -0.05], [-0.1, 0.05]]"
+# 20cm × 10cm rectangle (both feet in stance)
+```
+
+**Advanced**: Implement custom footprint plugin that updates based on gait phase.
+
+### Challenge 2: Kinematic Constraints
+
+**Wheeled Robot**: Instantaneous rotation, smooth velocity changes.
+
+**Humanoid**:
+- Limited step length (&lt;50cm typical)
+- No in-place rotation (requires stepping)
+- Discrete footsteps
+
+**Solution**: Restrict velocity limits and acceleration.
+
+```yaml
+FollowPath:
+  max_vel_x: 0.2        # Slow walking speed
+  max_vel_theta: 0.3    # Slow turning (requires footsteps)
+  acc_lim_x: 0.5        # Conservative acceleration
+  acc_lim_theta: 0.5
+  xy_goal_tolerance: 0.1
+  yaw_goal_tolerance: 0.2
+```
+
+### Challenge 3: Stability Constraints
+
+**Wheeled Robot**: Inherently stable.
+
+**Humanoid**: Must maintain ZMP inside support polygon (Module 2).
+
+**Solution**: Custom controller that respects ZMP constraints.
+
+## Custom Humanoid Controller
+
+### TEB Local Planner (Time Elastic Band)
+
+**Advantage**: Can encode humanoid-specific constraints.
+
+**Install**:
+```bash
+sudo apt install ros-humble-teb-local-planner
+```
+
+**Configuration**:
+```yaml
+controller_server:
+  ros__parameters:
+    controller_plugins: ["FollowPath"]
+
+    FollowPath:
+      plugin: "teb_local_planner/TebLocalPlannerROS"
+
+      # Trajectory
+      teb_autosize: true
+      dt_ref: 0.3              # Time resolution (footstep duration)
+      dt_hysteresis: 0.1
+      min_samples: 3
+      max_samples: 20
+
+      # Robot kinematics (humanoid-specific)
+      max_vel_x: 0.25
+      max_vel_x_backwards: 0.1
+      max_vel_theta: 0.3
+      acc_lim_x: 0.5
+      acc_lim_theta: 0.5
+
+      # Footprint (humanoid)
+      footprint_model:
+        type: "polygon"
+        vertices: [[0.1, 0.05], [0.1, -0.05], [-0.1, -0.05], [-0.1, 0.05]]
+
+      # Obstacles
+      min_obstacle_dist: 0.3   # Safety margin
+      inflation_dist: 0.4
+      include_costmap_obstacles: true
+
+      # Optimization
+      no_inner_iterations: 5
+      no_outer_iterations: 4
+      optimization_activate: true
+      optimization_verbose: false
+
+      # Humanoid-specific: Penalize lateral velocity
+      weight_kinematics_nh: 10.0        # Non-holonomic penalty
+      weight_kinematics_forward_drive: 5.0  # Prefer forward motion
+```
+
+**Key Settings**:
+- `dt_ref`: Footstep timing (0.3s = 300ms per step)
+- `weight_kinematics_nh`: High penalty for lateral motion (humanoids can't slide)
+
+## Footstep Planning (Advanced)
+
+### Dedicated Footstep Planner
+
+For precise humanoid navigation, use **footstep planner** instead of velocity commands.
+
+**Packages**:
+- `humanoid_navigation` (ROS 1, port to ROS 2 needed)
+- Custom footstep planner
+
+**Concept**:
+1. Nav2 global planner → Path (waypoints)
+2. Footstep planner → Discrete foot placements along path
+3. Walking controller (Module 2) → Execute footsteps
+
+### Simplified Footstep Planner
+
+**Pseudo-code**:
+```python
+def plan_footsteps(path, step_length=0.3, step_width=0.2):
+    """Convert continuous path to discrete footsteps."""
+    footsteps = []
+    current_foot = "left"
+
+    for i in range(len(path) - 1):
+        # Compute step direction
+        direction = (path[i+1] - path[i]).normalized()
+
+        # Alternate feet
+        lateral_offset = step_width / 2 if current_foot == "left" else -step_width / 2
+        foot_position = path[i] + direction * step_length + lateral_offset
+
+        footsteps.append({
+            'foot': current_foot,
+            'position': foot_position,
+            'orientation': direction.angle()
+        })
+
+        current_foot = "right" if current_foot == "left" else "left"
+
+    return footsteps
+```
+
+**Integration**:
+```python
+# Subscribe to Nav2 path
+def path_callback(path_msg):
+    footsteps = plan_footsteps(path_msg.poses)
+
+    # Send footsteps to walking controller
+    for step in footsteps:
+        execute_step(step)  # From Module 2 (ZMP control)
+```
+
+## Perception Integration
+
+### Using Isaac ROS for Obstacle Detection
+
+**Flow**: Camera → Isaac ROS (depth) → Nav2 costmap.
+
+**Launch**:
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        # Isaac ROS depth segmentation
+        Node(
+            package='isaac_ros_depth_segmentation',
+            executable='isaac_ros_depth_segmentation',
+            remappings=[
+                ('depth/image_rect', '/camera/depth/image_rect'),
+                ('depth/camera_info', '/camera/depth/camera_info'),
+            ]
+        ),
+
+        # Convert depth to PointCloud2
+        Node(
+            package='depth_image_proc',
+            executable='point_cloud_xyz',
+            remappings=[
+                ('image_rect', '/camera/depth/image_rect'),
+                ('points', '/camera/depth/points'),
+            ]
+        ),
+
+        # Nav2 costmap subscribes to /camera/depth/points
+        # (configured in costmap params)
+    ])
+```
+
+**Costmap Configuration**:
+```yaml
+obstacle_layer:
+  observation_sources: depth_camera
+  depth_camera:
+    topic: /camera/depth/points
+    data_type: PointCloud2
+    marking: true
+    clearing: true
+    max_obstacle_height: 2.0
+    min_obstacle_height: 0.1
+```
+
+**Result**: Real-time obstacle avoidance using camera depth.
+
+## Behavior Trees for High-Level Planning
+
+### What Are Behavior Trees?
+
+**Behavior Trees (BTs)**: Hierarchical task planning for robots.
+
+**Example**: "Go to charging station, if blocked, wait, if still blocked, ask for help."
+
+### Nav2 Behavior Tree
+
+**Default BT** (`navigate_to_pose_w_replanning.xml`):
+```xml
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="NavigateWithReplanning">
+      <RateController hz="1.0">
+        <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+          <PipelineSequence name="NavigateWithReplanning">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <FollowPath path="{path}" controller_id="FollowPath"/>
+          </PipelineSequence>
+          <SequenceStar name="RecoveryActions">
+            <ClearCostmapExceptRegion/>
+            <Spin spin_dist="1.57"/>
+            <Wait wait_duration="5"/>
+          </SequenceStar>
+        </RecoveryNode>
+      </RateController>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>
+```
+
+**Components**:
+- `ComputePathToPose`: Plan path
+- `FollowPath`: Execute path
+- `RecoveryNode`: If stuck, clear costmap → spin → wait
+
+### Custom Humanoid Behavior
+
+**Add**: Check battery before navigation.
+
+```xml
+<PipelineSequence name="NavigateWithBatteryCheck">
+  <Condition>
+    <CheckBattery min_battery="20"/>  <!-- Custom node -->
+  </Condition>
+  <ComputePathToPose goal="{goal}" path="{path}"/>
+  <FollowPath path="{path}"/>
+</PipelineSequence>
+```
+
+**Implement `CheckBattery`** (C++ plugin):
+```cpp
+BT::NodeStatus CheckBattery::tick() {
+  float battery_level = getBatteryLevel();  // Read from robot
+  if (battery_level < min_battery_) {
+    RCLCPP_WARN(logger_, "Low battery: %.1f%%", battery_level);
+    return BT::NodeStatus::FAILURE;
+  }
+  return BT::NodeStatus::SUCCESS;
+}
+```
+
+## Complete Humanoid Navigation Example
+
+### Scenario
+
+NAO robot in apartment:
+1. Detect AprilTag (charging station marker)
+2. Navigate to charging station
+3. Align for docking
+
+### Launch Stack
+
+```bash
+# Terminal 1: Isaac ROS Visual SLAM
+ros2 launch nao_navigation vslam.launch.py
+
+# Terminal 2: Isaac ROS AprilTag detection
+ros2 launch isaac_ros_apriltag apriltag.launch.py
+
+# Terminal 3: Nav2
+ros2 launch nao_navigation nav2.launch.py
+
+# Terminal 4: Behavior coordinator
+ros2 run nao_navigation charging_behavior.py
+```
+
+### Behavior Coordinator (Python)
+
+```python
+import rclpy
+from rclpy.action import ActionClient
+from nav2_msgs.action import NavigateToPose
+from apriltag_msgs.msg import AprilTagDetectionArray
+
+class ChargingBehavior:
+    def __init__(self):
+        self.node = rclpy.create_node('charging_behavior')
+        self.nav_client = ActionClient(self.node, NavigateToPose, 'navigate_to_pose')
+
+        # Subscribe to AprilTag detections
+        self.tag_sub = self.node.create_subscription(
+            AprilTagDetectionArray, '/tag_detections', self.tag_callback, 10
+        )
+
+        self.charging_station_pose = None
+
+    def tag_callback(self, msg):
+        """Detect charging station tag (ID 42)."""
+        for detection in msg.detections:
+            if detection.id == 42:
+                self.charging_station_pose = detection.pose
+                print("Found charging station!")
+                self.navigate_to_station()
+
+    def navigate_to_station(self):
+        """Send navigation goal to Nav2."""
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = 'map'
+        goal_msg.pose.pose = self.charging_station_pose
+
+        self.nav_client.wait_for_server()
+        future = self.nav_client.send_goal_async(goal_msg)
+        future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            print("Goal rejected!")
+            return
+
+        print("Navigating to charging station...")
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.result_callback)
+
+    def result_callback(self, future):
+        result = future.result().result
+        print("Arrived at charging station!")
+        # TODO: Align precisely and dock
+
+if __name__ == '__main__':
+    rclpy.init()
+    behavior = ChargingBehavior()
+    rclpy.spin(behavior.node)
+```
+
+**Run**:
+```bash
+ros2 run nao_navigation charging_behavior.py
+```
+
+**Result**: Robot detects tag → navigates → arrives at station.
+
+## Performance Tuning
+
+### Planner Speed
+
+**For faster planning**:
+```yaml
+GridBased:
+  use_astar: true       # A* faster than Dijkstra
+  allow_unknown: false  # Avoid unknown areas (faster)
+```
+
+### Controller Frequency
+
+**Balance responsiveness vs. CPU**:
+```yaml
+controller_server:
+  controller_frequency: 10.0  # 10 Hz (lower for humanoids)
+```
+
+**Humanoids**: 10-20 Hz sufficient (slower than wheeled robots).
+
+## Summary
+
+Nav2 enables autonomous navigation for humanoids with adaptations:
+- **Footprint**: Conservative polygon for bipedal stance
+- **Velocity Limits**: Restricted for stability and discrete steps
+- **TEB Planner**: Encodes humanoid kinematics constraints
+- **Footstep Planning**: Convert path to discrete foot placements
+- **Behavior Trees**: High-level task planning
+- **Perception**: Integrate Isaac ROS (VSLAM, depth, AprilTags)
+
+**Result**: Fully autonomous humanoid navigation in complex environments.
+
+---
+
+:::tip Key Takeaways
+- **Nav2**: ROS 2 navigation stack (planner + controller + costmap)
+- **Humanoid Adaptations**: Footprint, velocity limits, TEB planner
+- **Footstep Planning**: Convert paths to discrete foot placements
+- **Isaac ROS Integration**: VSLAM (localization) + depth (obstacles)
+- **Behavior Trees**: High-level task coordination
+- **Complete Stack**: Perception → Localization → Planning → Control
+:::
+
+## Exercises
+
+1. **Setup Nav2**: Configure and launch Nav2 with custom parameters
+2. **Simulate**: Use Gazebo + Nav2, send navigation goals
+3. **TEB Tuning**: Adjust TEB parameters for humanoid gait
+4. **Footstep Planner**: Implement simple footstep planner from path
+5. **Full Integration**: Combine VSLAM + AprilTag + Nav2 for autonomous task
+
+## Further Reading
+
+- [Nav2 Documentation](https://navigation.ros.org/)
+- [TEB Local Planner](http://wiki.ros.org/teb_local_planner)
+- [Humanoid Navigation Package](https://github.com/AIS-Bonn/humanoid_navigation)
+- [Behavior Trees for Robotics](https://github.com/BehaviorTree/BehaviorTree.CPP)
+
+## Module 3 Complete!
+
+You've mastered:
+- NVIDIA Isaac ecosystem (Sim, ROS, Omniverse)
+- Photorealistic simulation and synthetic data generation
+- GPU-accelerated perception (Isaac ROS)
+- Visual SLAM for real-time localization
+- Nav2 for autonomous humanoid navigation
+
+**Next Module**: Machine Learning & Reinforcement Learning—training intelligent behaviors!

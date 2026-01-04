@@ -1,0 +1,483 @@
+---
+title: Visual SLAM & Real-Time Mapping
+sidebar_label: Visual SLAM & Mapping
+sidebar_position: 6
+description: Implement hardware-accelerated Visual SLAM using Isaac ROS for real-time localization and mapping on humanoid robots.
+keywords: [visual slam, vslam, localization, mapping, isaac ros, orb-slam, cuvslam]
+tags: [module3, vslam, navigation, localization]
+---
+
+# Visual SLAM & Real-Time Mapping
+
+## Introduction
+
+**SLAM** = Simultaneous Localization and Mapping
+
+**The Problem**: Humanoid robot in unknown environment needs to:
+1. **Localize**: "Where am I?"
+2. **Map**: "What does the environment look like?"
+3. **Do both simultaneously**: While moving!
+
+**Visual SLAM (VSLAM)**: Use cameras (instead of lidar) for SLAM.
+
+## Why Visual SLAM for Humanoids?
+
+### Advantages Over Lidar
+
+| Feature | Lidar SLAM | Visual SLAM |
+|---------|------------|-------------|
+| **Sensor Cost** | $1,000-$10,000 | $50-$500 (cameras) |
+| **Weight** | Heavy (500g-2kg) | Light (20-100g) |
+| **Power** | 5-20W | 1-3W |
+| **Range** | 10-100m | 5-30m |
+| **Semantic Info** | No (just points) | Yes (colors, textures, objects) |
+| **Loop Closure** | Harder | Easier (visual features) |
+
+**For Humanoids**: Cameras are lightweight, low-power, and provide rich semantic information for navigation and manipulation.
+
+## SLAM Fundamentals
+
+### The SLAM Loop
+
+```
+┌────────────────────────────────────────────┐
+│  1. Sense: Capture camera frame            │
+└───────────┬────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────────┐
+│  2. Track: Estimate camera motion          │
+│     (visual odometry)                      │
+└───────────┬────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────────┐
+│  3. Map: Add landmarks to 3D map           │
+└───────────┬────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────────┐
+│  4. Optimize: Bundle adjustment            │
+│     (refine poses + map)                   │
+└───────────┬────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────────┐
+│  5. Loop Close: Detect revisited places    │
+│     (correct drift)                        │
+└────────────────────────────────────────────┘
+```
+
+### Key Concepts
+
+**Visual Odometry (VO)**: Track camera motion by matching features between frames.
+
+**Landmarks**: Distinct 3D points in environment (corners, edges).
+
+**Bundle Adjustment**: Optimize camera poses and landmark positions jointly.
+
+**Loop Closure**: Recognize previously visited location → correct accumulated drift.
+
+## Isaac ROS Visual SLAM (cuVSLAM)
+
+### Architecture
+
+**cuVSLAM** = CUDA-accelerated VSLAM engine by NVIDIA.
+
+**Features**:
+- GPU-accelerated feature detection and matching
+- Real-time performance (30+ FPS)
+- Stereo or mono camera support
+- ROS 2 native integration
+
+**Performance**:
+- CPU SLAM (ORB-SLAM3): 5-10 FPS
+- **Isaac ROS cuVSLAM**: 30-60 FPS (6× faster)
+
+### Installation
+
+**Already included in Isaac ROS Docker**:
+```bash
+# Inside Isaac ROS container
+ros2 pkg list | grep isaac_ros_visual_slam
+# Output: isaac_ros_visual_slam
+```
+
+### Hardware Requirements
+
+**Recommended**:
+- Stereo camera (e.g., Intel RealSense D435i, ZED 2)
+- IMU (for improved accuracy)
+- NVIDIA GPU (RTX 2060+) or Jetson Orin
+
+**Minimum**:
+- Monocular camera (less robust)
+- No IMU (visual-only SLAM)
+
+## Stereo Visual SLAM Setup
+
+### Step 1: Camera Calibration
+
+**Why**: SLAM requires accurate camera intrinsics and stereo baseline.
+
+**Calibrate with ROS 2**:
+```bash
+# Install camera calibration package
+sudo apt install ros-humble-camera-calibration
+
+# Run calibration (print checkerboard pattern)
+ros2 run camera_calibration cameracalibrator \
+  --size 8x6 \
+  --square 0.024 \
+  --ros-args \
+  -r image:=/camera/left/image_raw \
+  -r camera:=/camera/left
+```
+
+**Move checkerboard** in front of camera until "Calibrate" button lights up. Click it, then "Save" to `/tmp/calibrationdata.tar.gz`.
+
+**Extract camera_info**:
+```bash
+tar -xzf /tmp/calibrationdata.tar.gz
+# Creates ost.yaml with camera parameters
+```
+
+### Step 2: Launch cuVSLAM
+
+**Launch File** (`vslam.launch.py`):
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='isaac_ros_visual_slam',
+            executable='isaac_ros_visual_slam',
+            name='visual_slam_node',
+            parameters=[{
+                'enable_rectified_pose': True,
+                'denoise_input_images': True,
+                'rectified_images': True,
+                'enable_imu_fusion': False,  # Set True if IMU available
+                'enable_debug_mode': False,
+                'debug_dump_path': '/tmp/cuvslam',
+                'map_frame': 'map',
+                'odom_frame': 'odom',
+                'base_frame': 'base_link',
+                'input_base_frame': 'camera_link',
+                'enable_slam_visualization': True,
+                'enable_landmarks_view': True,
+                'enable_observations_view': True,
+            }],
+            remappings=[
+                ('stereo_camera/left/image', '/camera/left/image_rect'),
+                ('stereo_camera/left/camera_info', '/camera/left/camera_info'),
+                ('stereo_camera/right/image', '/camera/right/image_rect'),
+                ('stereo_camera/right/camera_info', '/camera/right/camera_info'),
+            ]
+        )
+    ])
+```
+
+**Run**:
+```bash
+ros2 launch my_package vslam.launch.py
+```
+
+### Step 3: Visualize in RViz
+
+```bash
+ros2 run rviz2 rviz2
+
+# In RViz:
+# 1. Set Fixed Frame → "map"
+# 2. Add → TF → Show transforms (camera trajectory)
+# 3. Add → PointCloud2 → Topic: /visual_slam/vis/landmarks_cloud
+# 4. Add → Path → Topic: /visual_slam/tracking/odometry_path
+```
+
+**What You See**:
+- **Blue trajectory**: Estimated camera path
+- **White points**: 3D landmarks (map)
+- **Red arrows**: TF frames
+
+### Step 4: Publish Odometry
+
+**Output Topics**:
+- `/visual_slam/tracking/odometry` (nav_msgs/Odometry)
+- `/visual_slam/tracking/vo_pose` (geometry_msgs/PoseStamped)
+- `/tf` (map → odom → base_link transforms)
+
+**Use in Navigation**:
+```python
+import rclpy
+from nav_msgs.msg import Odometry
+
+def odom_callback(msg):
+    x = msg.pose.pose.position.x
+    y = msg.pose.pose.position.y
+    print(f"Robot position: ({x:.2f}, {y:.2f})")
+
+node = rclpy.create_node('odom_listener')
+sub = node.create_subscription(Odometry, '/visual_slam/tracking/odometry', odom_callback, 10)
+```
+
+## Monocular VSLAM
+
+**Use Case**: Single camera (cheaper, lighter).
+
+**Trade-offs**:
+- No absolute scale (need initialization or other sensor)
+- Less robust to fast motion
+- Longer initialization time
+
+**Launch**:
+```python
+Node(
+    package='isaac_ros_visual_slam',
+    executable='isaac_ros_visual_slam',
+    parameters=[{
+        'enable_imu_fusion': True,  # IMU helps with scale
+    }],
+    remappings=[
+        ('visual_slam/image_0', '/camera/image_rect'),
+        ('visual_slam/camera_info_0', '/camera/camera_info'),
+    ]
+)
+```
+
+**Initialization**: Move camera in specific pattern (forward + lateral) to establish scale.
+
+## IMU Fusion
+
+**Why**: IMU (Inertial Measurement Unit) improves robustness:
+- Handles fast motion (blur)
+- Provides scale for monocular SLAM
+- Reduces drift
+
+### Hardware
+
+**Example**: Intel RealSense D435i (has built-in IMU).
+
+**Topics**:
+- `/camera/imu` (sensor_msgs/Imu)
+
+### Enable in cuVSLAM
+
+```python
+parameters=[{
+    'enable_imu_fusion': True,
+    'imu_frame': 'camera_imu_optical_frame',
+}],
+remappings=[
+    ('visual_slam/imu', '/camera/imu'),
+]
+```
+
+**Result**: 20-30% improvement in trajectory accuracy.
+
+## Map Saving and Loading
+
+### Save Map
+
+**After SLAM session**:
+```bash
+# Trigger map save service
+ros2 service call /visual_slam/save_map isaac_ros_visual_slam_interfaces/srv/FilePath \
+  "{file_path: '/home/user/my_map.slam'}"
+```
+
+**Output**: `my_map.slam` (binary map file with landmarks and poses).
+
+### Load Map (Localization Mode)
+
+**Next session** (re-use map):
+```python
+parameters=[{
+    'enable_localization_n_mapping': False,  # Localization only
+    'load_map_from_file': True,
+    'map_file_path': '/home/user/my_map.slam',
+}]
+```
+
+**Benefit**: Skip mapping, directly localize in known environment → faster startup.
+
+## Loop Closure Detection
+
+**Problem**: Visual odometry accumulates drift over time.
+
+**Solution**: Detect when robot revisits location → correct past trajectory.
+
+### How It Works
+
+1. **Bag of Words**: Represent each frame as visual vocabulary histogram
+2. **Database**: Store all previous frames' descriptors
+3. **Match**: New frame → query database → find similar frames
+4. **Verify**: Geometric verification (RANSAC)
+5. **Optimize**: Re-run bundle adjustment with loop closure constraint
+
+### Enabling in cuVSLAM
+
+**Already enabled by default**:
+```python
+parameters=[{
+    'enable_loop_closure': True,
+    'loop_closure_frequency': 1.0,  # Check every 1 second
+}]
+```
+
+**Observe in RViz**: When loop closed, you'll see trajectory "snap" to correct position (drift removed).
+
+## Performance Tuning
+
+### Reducing Latency
+
+**Key Parameters**:
+```python
+parameters=[{
+    'num_cameras': 2,  # Stereo
+    'image_buffer_size': 5,  # Smaller = less latency
+    'enable_slam_visualization': False,  # Disable for production
+}]
+```
+
+**Trade-off**: Smaller buffer → less robust to frame drops.
+
+### Increasing Robustness
+
+**Dense tracking**:
+```python
+parameters=[{
+    'enable_verbosity': True,  # Debug output
+    'verbosity': 3,            # High verbosity
+    'max_disparity': 64.0,     # For wide baseline stereo
+}]
+```
+
+## Integration with Nav2
+
+**Workflow**: cuVSLAM provides odometry → Nav2 uses it for navigation.
+
+```
+cuVSLAM (/visual_slam/tracking/odometry) → Nav2 (AMCL or direct) → Path Planning
+```
+
+**Launch Both**:
+```bash
+# Terminal 1: VSLAM
+ros2 launch my_package vslam.launch.py
+
+# Terminal 2: Nav2
+ros2 launch nav2_bringup navigation_launch.py \
+  params_file:=nav2_params.yaml
+
+# Terminal 3: Send navigation goal
+ros2 topic pub /goal_pose geometry_msgs/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.0, y: 1.0, z: 0.0}}}'
+```
+
+**Result**: Humanoid navigates to goal using VSLAM for localization.
+
+## Real-World Deployment Example
+
+### Humanoid Indoor Navigation
+
+**Scenario**: NAO robot explores office, builds map, returns to charging station.
+
+**Hardware**:
+- NAO robot (humanoid)
+- Stereo camera (forward-facing)
+- Jetson Orin Nano (compute)
+
+**Steps**:
+
+1. **Mapping Phase**:
+```bash
+# Start VSLAM
+ros2 launch nao_navigation vslam_mapping.launch.py
+
+# Teleoperate robot to explore
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+# Save map after exploration
+ros2 service call /visual_slam/save_map ... '{file_path: "/maps/office.slam"}'
+```
+
+2. **Localization Phase**:
+```bash
+# Load map + Nav2
+ros2 launch nao_navigation vslam_localization.launch.py map_file:=/maps/office.slam
+ros2 launch nao_navigation nav2.launch.py
+
+# Autonomously navigate to charging station
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  '{pose: {header: {frame_id: "map"}, pose: {position: {x: 0, y: 0}}}}'
+```
+
+**Performance**:
+- Mapping: 30 FPS, real-time
+- Localization: &lt;50ms latency
+- Navigation: Smooth collision-free paths
+
+## Troubleshooting
+
+### Common Issues
+
+| Problem | Symptom | Fix |
+|---------|---------|-----|
+| **SLAM fails to initialize** | No landmarks | Move camera with translation + rotation |
+| **Drift over time** | Loop closure not working | Ensure revisiting same areas |
+| **Jittery pose** | High-frequency noise | Enable IMU fusion, increase solver iterations |
+| **Low FPS** | &lt;15 FPS | Reduce image resolution, disable visualization |
+
+### Debug Mode
+
+```python
+parameters=[{
+    'enable_debug_mode': True,
+    'debug_dump_path': '/tmp/cuvslam_debug',
+}]
+```
+
+**Outputs**: Feature images, trajectory plots in `/tmp/cuvslam_debug/`.
+
+## Summary
+
+Visual SLAM enables:
+- **Localization**: Know robot position in real-time
+- **Mapping**: Build 3D map of environment
+- **Navigation**: Autonomous movement in unknown spaces
+
+**Isaac ROS cuVSLAM**:
+- GPU-accelerated (6× faster than CPU)
+- Stereo or mono + IMU support
+- ROS 2 native, easy Nav2 integration
+- Map saving/loading for persistent localization
+
+**Next**: Nav2 path planning for humanoid bipedal locomotion!
+
+---
+
+:::tip Key Takeaways
+- **VSLAM**: Simultaneous localization and mapping using cameras
+- **cuVSLAM**: NVIDIA GPU-accelerated SLAM (30+ FPS)
+- **Stereo > Mono**: More robust, absolute scale
+- **IMU Fusion**: Improves accuracy and handles fast motion
+- **Loop Closure**: Corrects drift by detecting revisited areas
+- **Nav2 Integration**: cuVSLAM odometry → autonomous navigation
+:::
+
+## Exercises
+
+1. **Calibrate Camera**: Use ROS 2 calibration tool, save camera_info
+2. **Run cuVSLAM**: Launch with stereo camera, visualize in RViz
+3. **Build Office Map**: Walk robot through room, save map
+4. **Localization**: Re-launch with saved map, verify position tracking
+5. **Nav2 Integration**: Send navigation goal using VSLAM odometry
+
+## Further Reading
+
+- [Isaac ROS Visual SLAM Documentation](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_visual_slam/index.html)
+- [ORB-SLAM3 Paper](https://arxiv.org/abs/2007.11898) (CPU baseline comparison)
+- [Visual SLAM Tutorial Series](https://www.youtube.com/playlist?list=PLgnQpQtFTOGQrZ4O5QzbIHgl3b1JHimN_)

@@ -1,0 +1,454 @@
+---
+title: Isaac ROS Fundamentals - Hardware-Accelerated Perception
+sidebar_label: Isaac ROS Fundamentals
+sidebar_position: 5
+description: Deploy GPU-accelerated perception pipelines using Isaac ROS for real-time computer vision on humanoid robots.
+keywords: [isaac ros, gpu acceleration, perception, computer vision, jetson, cuda, ros2]
+tags: [module3, isaac-ros, perception]
+---
+
+# Isaac ROS Fundamentals: Hardware-Accelerated Perception
+
+## Introduction
+
+**The Perception Bottleneck**: Traditional CPU-based vision runs at 5-10 FPS—too slow for real-time humanoid control.
+
+**Isaac ROS Solution**: GPU-accelerated ROS 2 nodes achieve 30+ FPS, enabling responsive perception for navigation, manipulation, and obstacle avoidance.
+
+## What is Isaac ROS?
+
+### Architecture
+
+**Isaac ROS** = ROS 2 packages + NVIDIA GPU acceleration (CUDA, TensorRT, VPI).
+
+```
+┌──────────────────────────────────────────────┐
+│         Isaac ROS Package                    │
+│  ┌────────────────────────────────────────┐  │
+│  │  ROS 2 Node (Standard Interface)      │  │
+│  │  - Subscribe to /camera/image_raw     │  │
+│  │  - Publish to /detections             │  │
+│  └─────────────┬────────────────────────────┘  │
+│                │                              │
+│                ▼                              │
+│  ┌────────────────────────────────────────┐  │
+│  │  NVIDIA Acceleration Layer            │  │
+│  │  - TensorRT (deep learning inference) │  │
+│  │  - VPI (vision primitives)            │  │
+│  │  - CUDA (custom kernels)              │  │
+│  └────────────────────────────────────────┘  │
+│                │                              │
+│                ▼                              │
+│         [ NVIDIA GPU ]                        │
+└──────────────────────────────────────────────┘
+```
+
+### Key Packages
+
+| Package | Function | Speedup |
+|---------|----------|---------|
+| **isaac_ros_image_pipeline** | Image processing (debayer, rectify) | 10-20× |
+| **isaac_ros_dnn_inference** | Deep learning (detection, segmentation) | 5-15× |
+| **isaac_ros_visual_slam** | Real-time VSLAM | 3-5× |
+| **isaac_ros_apriltag** | Fiducial marker detection | 20× |
+| **isaac_ros_depth_segmentation** | Depth-based segmentation | 8× |
+
+## Installation
+
+### Prerequisites
+
+**Hardware**:
+- NVIDIA GPU: RTX 2000+ or Jetson Orin/Xavier
+- 8GB+ RAM
+- CUDA-capable system
+
+**Software**:
+- Ubuntu 20.04/22.04
+- ROS 2 Humble
+- Docker 20.10+
+- NVIDIA Container Toolkit
+
+### Install NVIDIA Container Toolkit
+
+```bash
+# Add NVIDIA package repository
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+
+# Install
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo systemctl restart docker
+```
+
+**Verify**:
+```bash
+docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
+```
+
+Should show GPU info.
+
+### Pull Isaac ROS Docker Image
+
+```bash
+# Create workspace
+mkdir -p ~/workspaces/isaac_ros-dev/src
+cd ~/workspaces/isaac_ros-dev
+
+# Pull development container
+docker pull nvcr.io/nvidia/isaac-ros/isaac-ros-dev-x86_64:release-2.0
+
+# Run container
+docker run -it --gpus all \
+  --network host \
+  -v $(pwd):/workspaces/isaac_ros-dev \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -e DISPLAY=$DISPLAY \
+  nvcr.io/nvidia/isaac-ros/isaac-ros-dev-x86_64:release-2.0
+```
+
+**Inside Container**:
+```bash
+# Source ROS 2
+source /opt/ros/humble/setup.bash
+
+# Verify Isaac ROS packages
+ros2 pkg list | grep isaac_ros
+```
+
+## First Isaac ROS Node: Image Rectification
+
+### Problem
+
+Raw camera images have distortion (barrel/pincushion). Perception algorithms need **rectified** (undistorted) images.
+
+### CPU vs. GPU Comparison
+
+**CPU Rectification** (`image_proc`):
+```bash
+ros2 run image_proc image_proc --ros-args -p queue_size:=10
+# Performance: ~15 FPS @ 1920×1080
+```
+
+**GPU Rectification** (Isaac ROS):
+```bash
+ros2 launch isaac_ros_image_pipeline isaac_ros_image_pipeline.launch.py
+# Performance: ~120 FPS @ 1920×1080 (8× faster!)
+```
+
+### Launch File Example
+
+**`isaac_rectify.launch.py`**:
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='isaac_ros_image_proc',
+            executable='isaac_ros_image_proc',
+            name='rectify_node',
+            parameters=[{
+                'queue_size': 10,
+            }],
+            remappings=[
+                ('image_raw', '/camera/image_raw'),
+                ('camera_info', '/camera/camera_info'),
+                ('image_rect', '/camera/image_rect'),
+            ]
+        )
+    ])
+```
+
+**Run**:
+```bash
+ros2 launch my_package isaac_rectify.launch.py
+```
+
+## Object Detection with TensorRT
+
+### Workflow
+
+1. **Train model** (YOLOv8, on synthetic data from previous chapter)
+2. **Convert to TensorRT** (optimize for GPU inference)
+3. **Deploy with Isaac ROS** (real-time detection)
+
+### Step 1: Export ONNX Model
+
+```python
+# After training YOLOv8
+from ultralytics import YOLO
+
+model = YOLO('runs/detect/train/weights/best.pt')
+model.export(format='onnx', imgsz=640)  # Creates best.onnx
+```
+
+### Step 2: Convert to TensorRT Engine
+
+```bash
+# Inside Isaac ROS container
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=best.onnx \
+  --saveEngine=best.trt \
+  --fp16  # Use FP16 for speed (2× faster)
+```
+
+**Result**: `best.trt` optimized for your GPU.
+
+### Step 3: Deploy with Isaac ROS DNN Inference
+
+**Launch File**:
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='isaac_ros_dnn_inference',
+            executable='isaac_ros_dnn_inference',
+            name='yolov8_node',
+            parameters=[{
+                'model_file_path': '/workspace/best.trt',
+                'engine_file_path': '/workspace/best.trt',
+                'input_tensor_names': ['images'],
+                'output_tensor_names': ['output0'],
+                'input_binding_names': ['images'],
+                'output_binding_names': ['output0'],
+                'network_image_width': 640,
+                'network_image_height': 640,
+            }],
+            remappings=[
+                ('tensor_pub', '/detections'),
+                ('image', '/camera/image_raw'),
+            ]
+        )
+    ])
+```
+
+**Run**:
+```bash
+ros2 launch my_package yolov8_detection.launch.py
+
+# In another terminal, view detections
+ros2 topic echo /detections
+```
+
+**Performance**: 30-60 FPS @ 640×640 on RTX 3060.
+
+## AprilTag Detection (Fiducial Markers)
+
+### Use Case
+
+**AprilTags**: QR-code-like markers for localization, object tracking.
+
+**Humanoid Application**: Detect charging station marker to autonomously dock.
+
+### CPU vs. GPU
+
+| Implementation | FPS @ 1920×1080 |
+|----------------|-----------------|
+| **apriltag_ros (CPU)** | 5 FPS |
+| **isaac_ros_apriltag (GPU)** | 100+ FPS |
+
+### Usage
+
+```bash
+ros2 launch isaac_ros_apriltag isaac_ros_apriltag.launch.py \
+  camera_topic:=/camera/image_raw \
+  camera_info_topic:=/camera/camera_info
+```
+
+**Output Topic**: `/tag_detections`
+
+**Message Format**:
+```
+AprilTagDetectionArray:
+  - id: 42
+    pose:
+      position: {x: 1.5, y: 0.2, z: 0.8}
+      orientation: {x: 0, y: 0, z: 0, w: 1}
+    corners: [[120, 340], [320, 340], ...]
+```
+
+**Use in Code**:
+```python
+import rclpy
+from apriltag_msgs.msg import AprilTagDetectionArray
+
+def tag_callback(msg):
+    for detection in msg.detections:
+        if detection.id == 42:  # Charging station
+            print(f"Found charging station at {detection.pose.position}")
+            # Navigate to it using Nav2
+
+node = rclpy.create_node('tag_listener')
+sub = node.create_subscription(AprilTagDetectionArray, '/tag_detections', tag_callback, 10)
+```
+
+## Stereo Depth Perception
+
+### Use Case
+
+Humanoid needs depth map to detect obstacles (stairs, walls, drop-offs).
+
+### Isaac ROS Stereo Disparity
+
+**Setup**: Dual cameras (left + right) → compute depth.
+
+**Launch**:
+```bash
+ros2 launch isaac_ros_stereo_image_proc isaac_ros_stereo_image_proc.launch.py \
+  left_image_topic:=/left/image_raw \
+  right_image_topic:=/right/image_raw \
+  left_camera_info_topic:=/left/camera_info \
+  right_camera_info_topic:=/right/camera_info
+```
+
+**Output**: `/disparity` (disparity map) and `/depth` (depth image in meters).
+
+**Performance**: 30 FPS @ 1280×720 on Jetson Orin.
+
+### Visualize in RViz
+
+```bash
+ros2 run rviz2 rviz2
+
+# Add → PointCloud2 → Topic: /depth/points
+```
+
+**Result**: 3D point cloud of environment.
+
+## Integration with ROS 2 Ecosystem
+
+### Bridging Isaac Sim and Isaac ROS
+
+**Workflow**: Develop in Isaac Sim → Deploy on robot with Isaac ROS.
+
+**Isaac Sim → ROS 2**:
+```python
+# In Isaac Sim
+import omni.isaac.core.utils.extensions as extensions_utils
+extensions_utils.enable_extension("omni.isaac.ros2_bridge")
+
+# Publish camera to ROS 2
+from omni.isaac.ros2_bridge import ROS2CameraHelper
+camera = ROS2CameraHelper(
+    camera_prim_path="/World/Camera",
+    topic_name="/camera/image_raw"
+)
+```
+
+**ROS 2 → Isaac ROS**:
+```bash
+# Isaac ROS node subscribes to /camera/image_raw
+ros2 launch my_package perception_pipeline.launch.py
+```
+
+**Result**: Seamless sim-to-real pipeline.
+
+### Nav2 Integration (Preview)
+
+Isaac ROS perception feeds Nav2 for navigation:
+
+```
+Camera → Isaac ROS (object detection) → Costmap → Nav2 (path planning)
+```
+
+**Example**: Detect chairs in camera → Mark as obstacles in costmap → Nav2 plans around them.
+
+## Performance Optimization
+
+### Choosing Precision
+
+| Precision | Accuracy | Speed | Use Case |
+|-----------|----------|-------|----------|
+| **FP32** | Highest | Baseline | Development |
+| **FP16** | High | 2× faster | Production (recommended) |
+| **INT8** | Good | 4× faster | Edge devices (Jetson) |
+
+**Convert to INT8**:
+```bash
+# Requires calibration data
+trtexec --onnx=model.onnx --int8 --calib=calibration.cache --saveEngine=model_int8.trt
+```
+
+### Batching
+
+Process multiple frames simultaneously:
+
+```python
+# In Isaac ROS DNN node config
+parameters=[{
+    'batch_size': 4  # Process 4 images per inference
+}]
+```
+
+**Trade-off**: Higher throughput but increased latency.
+
+## Jetson Deployment
+
+### Jetson Orin Setup
+
+**Same Docker workflow**:
+```bash
+# On Jetson device
+docker pull nvcr.io/nvidia/isaac-ros/isaac-ros-dev-aarch64:release-2.0
+
+docker run -it --runtime nvidia \
+  --network host \
+  -v $(pwd):/workspaces/isaac_ros-dev \
+  nvcr.io/nvidia/isaac-ros/isaac-ros-dev-aarch64:release-2.0
+```
+
+**Power Modes** (maximize performance):
+```bash
+# Max performance (15W mode on Orin Nano)
+sudo nvpmodel -m 0
+sudo jetson_clocks
+```
+
+**Performance**: Jetson Orin → 30 FPS YOLOv8 @ 640×640 with FP16.
+
+## Summary
+
+Isaac ROS provides:
+- **GPU Acceleration**: 5-20× faster than CPU
+- **ROS 2 Native**: Drop-in replacement for standard nodes
+- **TensorRT Integration**: Optimized deep learning inference
+- **Jetson Support**: Edge deployment on robots
+
+**Key Nodes**:
+- Image processing (rectify, debayer)
+- Object detection (TensorRT)
+- AprilTag detection
+- Stereo depth perception
+
+**Next**: Visual SLAM for real-time localization and mapping!
+
+---
+
+:::tip Key Takeaways
+- **Isaac ROS**: GPU-accelerated ROS 2 packages (5-20× faster)
+- **TensorRT**: Optimize trained models for inference
+- **Docker Deployment**: Consistent environment across platforms
+- **Jetson**: Run same code on edge devices
+- **Integration**: Seamless with Nav2, RViz, standard ROS 2 tools
+:::
+
+## Exercises
+
+1. **Setup Isaac ROS**: Pull Docker image, verify GPU access
+2. **Object Detection**: Deploy YOLOv8 model with Isaac ROS DNN
+3. **AprilTag**: Print AprilTag, detect with Isaac ROS, measure FPS
+4. **Depth Map**: Set up stereo camera, visualize depth in RViz
+5. **Benchmark**: Compare CPU vs. GPU performance for image rectification
+
+## Further Reading
+
+- [Isaac ROS Documentation](https://nvidia-isaac-ros.github.io/)
+- [TensorRT Developer Guide](https://docs.nvidia.com/deeplearning/tensorrt/developer-guide/)
+- [Jetson Orin Benchmarks](https://developer.nvidia.com/embedded/jetson-benchmarks)

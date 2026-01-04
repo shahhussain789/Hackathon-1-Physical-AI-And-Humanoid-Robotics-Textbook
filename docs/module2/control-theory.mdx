@@ -1,0 +1,287 @@
+---
+title: Control Theory for Robotics - PID and Beyond
+sidebar_label: Control Theory
+sidebar_position: 4
+description: Design controllers for precise robot motion - from PID to model predictive control and impedance control.
+keywords: [pid control, model predictive control, impedance control, feedforward, trajectory tracking]
+tags: [module2, control, algorithms]
+---
+
+# Control Theory for Robotics: PID and Beyond
+
+## Introduction
+
+You've computed the desired joint angles (IK) and understand the dynamics. Now: **How do you make the robot actually follow the desired trajectory?**
+
+Enter **control theory**—the art and science of making systems behave as desired.
+
+## The Control Problem
+
+**Goal**: Make actual state x(t) track desired state x_d(t).
+
+**Error**: e(t) = x_d(t) - x(t)
+
+**Control law**: τ(t) = f(e, ...) → Choose torques to minimize error.
+
+## PID Control
+
+### The Classic Controller
+
+**PID** = Proportional + Integral + Derivative
+
+```
+τ(t) = K_p·e(t) + K_i·∫e(t)dt + K_d·ė(t)
+
+where:
+- K_p: Proportional gain (responds to current error)
+- K_i: Integral gain (eliminates steady-state error)
+- K_d: Derivative gain (damps oscillations)
+```
+
+### Component Roles
+
+| Term | Effect | When to Use |
+|------|--------|-------------|
+| **P** | Corrects current error | Always |
+| **I** | Eliminates bias/offset | Persistent steady-state error |
+| **D** | Reduces overshoot | Oscillatory systems |
+
+### Python Implementation
+
+```python
+class PIDController:
+    def __init__(self, kp, ki, kd, dt=0.01):
+        self.kp, self.ki, self.kd = kp, ki, kd
+        self.dt = dt
+        self.integral = 0
+        self.prev_error = 0
+
+    def update(self, error):
+        # Proportional term
+        p_term = self.kp * error
+
+        # Integral term (with anti-windup)
+        self.integral += error * self.dt
+        self.integral = np.clip(self.integral, -10, 10)  # Anti-windup
+        i_term = self.ki * self.integral
+
+        # Derivative term
+        d_term = self.kd * (error - self.prev_error) / self.dt
+        self.prev_error = error
+
+        return p_term + i_term + d_term
+
+# Usage for joint position control
+pid = PIDController(kp=100, ki=5, kd=10)
+
+for t in range(1000):
+    error = theta_desired - theta_current
+    torque = pid.update(error)
+    # Apply torque to robot...
+```
+
+### PID Tuning
+
+**Manual Tuning** (Ziegler-Nichols method):
+1. Set K_i = K_d = 0
+2. Increase K_p until oscillation
+3. Set K_p = 0.6 K_p_critical
+4. Set K_i = 2K_p / T_oscillation
+5. Set K_d = K_p · T_oscillation / 8
+
+**Practical Tips**:
+- Start with P-only, add D to reduce overshoot, add I if needed
+- High K_p → fast response but overshoot
+- High K_d → damped but sluggish
+- Too much K_i → oscillation
+
+## Feedforward Control
+
+### Idea: Use the Model
+
+**Problem**: PID is reactive (waits for error).
+
+**Solution**: If we know dynamics, predict required torque.
+
+**Feedforward term**:
+```
+τ_ff = M(θ)θ̈_d + C(θ,θ̇)θ̇_d + G(θ)
+```
+
+**Combined with feedback**:
+```
+τ = τ_ff + τ_feedback(PID)
+```
+
+**Benefit**: Faster tracking, smaller errors.
+
+```python
+def feedforward_control(theta, theta_dot, theta_desired, theta_dot_desired, theta_ddot_desired):
+    """Computed torque control (feedforward + PID)."""
+    # Feedforward (inverse dynamics)
+    M = inertia_matrix(theta)
+    C = coriolis_matrix(theta, theta_dot)
+    G = gravity_vector(theta)
+    tau_ff = M @ theta_ddot_desired + C @ theta_dot_desired + G
+
+    # Feedback (PID on error)
+    error = theta_desired - theta
+    error_dot = theta_dot_desired - theta_dot
+    tau_fb = kp * error + kd * error_dot
+
+    return tau_ff + tau_fb
+```
+
+## Model Predictive Control (MPC)
+
+### Optimization-Based Control
+
+**Idea**: Optimize future control inputs over a horizon.
+
+**At each timestep**:
+1. Predict future states over N steps
+2. Optimize control sequence to minimize cost
+3. Apply first control, discard rest
+4. Repeat (receding horizon)
+
+**Cost Function**:
+```
+minimize Σ ||x(t) - x_d(t)||² + ||u(t)||²
+```
+
+**Advantages**:
+- Handles constraints (joint limits, torque limits)
+- Optimizes over future trajectory
+
+**Disadvantage**: Computationally expensive (real-time challenge).
+
+**Tools**:
+- **CasADi**: Fast nonlinear MPC
+- **ACADOS**: Real-time optimal control
+
+## Impedance Control
+
+### Compliant Interaction
+
+**Use Case**: Robot interacting with environment (pushing, wiping).
+
+**Idea**: Control relationship between force and position.
+
+**Target Dynamics**:
+```
+F = M_d(ẍ - ẍ_d) + B_d(ẋ - ẋ_d) + K_d(x - x_d)
+```
+
+Makes robot behave like mass-spring-damper system.
+
+**Example**: Soft contact for assembly tasks.
+
+```python
+def impedance_control(x, x_dot, x_desired, F_measured, M_d=1.0, B_d=10, K_d=100):
+    """Impedance controller for compliant interaction."""
+    position_error = x_desired - x
+    velocity_error = -x_dot  # Desired velocity = 0
+
+    # Desired force based on impedance law
+    F_desired = K_d * position_error + B_d * velocity_error
+
+    # Combine with measured force
+    F_command = F_desired - F_measured
+
+    return F_command  # Convert to joint torques via Jacobian transpose
+```
+
+## Trajectory Generation
+
+### Smooth Paths
+
+**Requirement**: Generate smooth joint trajectories (continuous velocity, acceleration).
+
+**Methods**:
+1. **Polynomial trajectories**: 3rd or 5th order polynomials
+2. **Splines**: Cubic splines for waypoint interpolation
+3. **Minimum jerk**: Optimize for smoothness
+
+**5th-Order Polynomial**:
+```
+θ(t) = a₀ + a₁t + a₂t² + a₃t³ + a₄t⁴ + a₅t⁵
+```
+
+Solve for coefficients given boundary conditions (start/end position, velocity, acceleration).
+
+```python
+def quintic_trajectory(t, T, theta_0, theta_f, vel_0=0, vel_f=0):
+    """5th-order polynomial trajectory."""
+    a0 = theta_0
+    a1 = vel_0
+    a2 = 0
+    a3 = (20*(theta_f - theta_0) - (8*vel_f + 12*vel_0)*T) / (2*T**3)
+    a4 = (30*(theta_0 - theta_f) + (14*vel_f + 16*vel_0)*T) / (2*T**4)
+    a5 = (12*(theta_f - theta_0) - 6*(vel_f + vel_0)*T) / (2*T**5)
+
+    return a0 + a1*t + a2*t**2 + a3*t**3 + a4*t**4 + a5*t**5
+```
+
+## Control in ROS 2
+
+### ros2_control Framework
+
+**Components**:
+- **Hardware Interface**: Communicates with robot/sim
+- **Controller Manager**: Loads/unloads controllers
+- **Controllers**: Position, velocity, effort controllers
+
+**Configuration** (YAML):
+```yaml
+controller_manager:
+  ros__parameters:
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+    gains:
+      shoulder_pan_joint: {p: 100, i: 1, d: 10}
+```
+
+**Usage**:
+```bash
+ros2 control load_controller joint_trajectory_controller
+ros2 control switch_controller --activate joint_trajectory_controller
+```
+
+## Summary
+
+Control makes robots follow desired trajectories:
+- **PID**: Simple, widely used (tune K_p, K_i, K_d)
+- **Feedforward**: Use dynamics model for better tracking
+- **MPC**: Optimize over future → handles constraints
+- **Impedance**: Compliant interaction with environment
+- **ros2_control**: Production-ready framework
+
+**Next**: Setting up simulation environments to test these controllers!
+
+---
+
+:::tip Key Takeaways
+- PID: τ = K_p·e + K_i·∫e + K_d·ė
+- Feedforward: τ_ff = M θ̈_d + C θ̇_d + G
+- MPC: Optimize future controls (handles constraints)
+- Impedance: Control force-position relationship
+- ros2_control: ROS 2 framework for real-time control
+:::
+
+## Exercises
+
+1. **Tune PID**: Implement PID for a simulated 2-link arm. Experiment with gains.
+2. **Feedforward**: Add inverse dynamics feedforward. Compare tracking error with/without.
+3. **Trajectory**: Generate a 5th-order polynomial trajectory and track it with PID.
+
+## Further Reading
+
+- "Feedback Control of Dynamic Systems" by Franklin et al.
+- [ros2_control Documentation](https://control.ros.org/)

@@ -1,0 +1,440 @@
+---
+title: Isaac Sim Deep Dive - Photorealistic Simulation
+sidebar_label: Isaac Sim Deep Dive
+sidebar_position: 3
+description: Master Isaac Sim for creating photorealistic environments, importing robots, and setting up complex simulation scenarios for humanoid robotics.
+keywords: [isaac sim, photorealistic simulation, usd, omniverse, robot simulation, scene creation]
+tags: [module3, isaac-sim, simulation]
+---
+
+# Isaac Sim Deep Dive: Photorealistic Simulation
+
+## Introduction
+
+**Isaac Sim** is more than a robot simulator—it's a **digital twin platform** with film-quality rendering, GPU-accelerated physics, and AI training capabilities.
+
+This chapter teaches you to create production-ready simulation environments for humanoid robotics.
+
+## Scene Creation Fundamentals
+
+### The Isaac Sim Interface
+
+**Main Components**:
+```
+┌─────────────────────────────────────────────┐
+│  Viewport (3D Scene)                        │
+│  ┌────────────────────────────────────┐     │
+│  │                                    │     │
+│  │     [Your Robot Here]              │     │
+│  │                                    │     │
+│  └────────────────────────────────────┘     │
+├─────────────────────────────────────────────┤
+│  Stage (Scene Graph)  │  Property Panel     │
+│  - World              │  - Transform        │
+│    - Ground           │  - Physics          │
+│    - Robot            │  - Rendering        │
+│    - Lights           │  - Materials        │
+└───────────────────────┴─────────────────────┘
+```
+
+### Creating a Scene from Scratch
+
+**Step 1: New Stage**
+```python
+from omni.isaac.kit import SimulationApp
+simulation_app = SimulationApp({"headless": False})
+
+from omni.isaac.core import World
+from omni.isaac.core.utils.stage import create_new_stage
+
+# Create blank scene
+create_new_stage()
+world = World()
+```
+
+**Step 2: Add Ground Plane**
+```python
+# Method 1: Default ground (simple)
+world.scene.add_default_ground_plane()
+
+# Method 2: Custom ground with physics material
+from omni.isaac.core.objects import GroundPlane
+ground = GroundPlane(
+    prim_path="/World/Ground",
+    size=100.0,  # 100m × 100m
+    color=[0.5, 0.5, 0.5],  # Gray
+    physics_material_path="/World/PhysicsMaterial/Ground"
+)
+```
+
+**Step 3: Add Lighting**
+```python
+from pxr import UsdLux
+
+# Create dome light (ambient)
+dome_light = UsdLux.DomeLight.Define(world.stage, "/World/DomeLight")
+dome_light.CreateIntensityAttr(1000)
+
+# Create directional light (sun)
+sun = UsdLux.DistantLight.Define(world.stage, "/World/Sun")
+sun.CreateIntensityAttr(3000)
+sun.AddOrientOp().Set((45, 0, 0))  # 45-degree angle
+```
+
+## Importing Robot Models
+
+### Method 1: From URDF
+
+**Import URDF** (e.g., humanoid NAO robot):
+```python
+from omni.isaac.urdf import _urdf
+
+# Get URDF importer interface
+urdf_interface = _urdf.acquire_urdf_interface()
+
+# Import URDF file
+import_config = _urdf.ImportConfig()
+import_config.merge_fixed_joints = False
+import_config.fix_base = False  # Floating base for humanoid
+import_config.import_inertia_tensor = True
+
+success = urdf_interface.parse_urdf(
+    urdf_path="/path/to/nao_robot.urdf",
+    prim_path="/World/NAO",
+    config=import_config
+)
+```
+
+**Result**: URDF converted to USD with:
+- Visual meshes → USD geometry
+- Collision shapes → PhysX colliders
+- Joints → USD articulation
+- Inertia → PhysX mass properties
+
+### Method 2: From Pre-Built Assets
+
+**NVIDIA Asset Library**:
+```python
+from omni.isaac.core.utils.nucleus import get_assets_root_path
+
+assets_root = get_assets_root_path()
+
+# Load pre-built humanoid (Carter robot with arms)
+from omni.isaac.core.robots import Robot
+robot = Robot(
+    prim_path="/World/Carter",
+    usd_path=assets_root + "/Isaac/Robots/Carter/carter_v1.usd"
+)
+```
+
+**Available Assets**:
+- Franka Emika Panda (arm)
+- UR10 (arm)
+- ANYmal (quadruped)
+- Carter (wheeled mobile base)
+- Custom imports via USD
+
+### Method 3: Procedural Generation (Python)
+
+**Build Robot from Primitives**:
+```python
+from omni.isaac.core.prims import RigidPrim
+from pxr import UsdGeom, UsdPhysics
+
+# Create simple bipedal leg
+def create_leg(world, side="left"):
+    offset = 0.1 if side == "left" else -0.1
+
+    # Thigh
+    thigh = RigidPrim(
+        prim_path=f"/World/Robot/{side}_thigh",
+        position=[0, offset, 0.5],
+    )
+    UsdGeom.Capsule.Define(world.stage, f"/World/Robot/{side}_thigh/visual")
+
+    # Add revolute joint at hip
+    hip_joint = UsdPhysics.RevoluteJoint.Define(
+        world.stage, f"/World/Robot/{side}_hip_joint"
+    )
+    hip_joint.CreateAxisAttr("Y")
+    hip_joint.CreateLowerLimitAttr(-90)
+    hip_joint.CreateUpperLimitAttr(90)
+```
+
+## Advanced Scene Setup
+
+### Photorealistic Environment
+
+**Apartment Scene**:
+```python
+# Import pre-made apartment from NVIDIA Nucleus
+apartment_usd = assets_root + "/Isaac/Environments/Simple_Room/simple_room.usd"
+
+from pxr import Usd
+stage = world.stage
+apartment_prim = stage.DefinePrim("/World/Apartment", "Xform")
+apartment_prim.GetReferences().AddReference(apartment_usd)
+```
+
+**Custom Materials** (Physically-Based Rendering):
+```python
+from omni.isaac.core.materials import PreviewSurface
+
+# Create wood floor material
+wood = PreviewSurface(prim_path="/World/Materials/Wood")
+wood.set_color([0.6, 0.4, 0.2])  # Brown
+wood.set_roughness(0.7)  # Matte finish
+wood.set_metallic(0.0)   # Non-metallic
+
+# Apply to ground
+ground.apply_visual_material(wood)
+```
+
+### Dynamic Objects (Clutter)
+
+**Spawn Random Objects**:
+```python
+import random
+from omni.isaac.core.objects import DynamicCuboid
+
+def spawn_clutter(num_objects=20):
+    """Spawn random boxes in scene."""
+    objects = []
+    for i in range(num_objects):
+        x = random.uniform(-5, 5)
+        y = random.uniform(-5, 5)
+        size = random.uniform(0.1, 0.5)
+
+        obj = DynamicCuboid(
+            prim_path=f"/World/Clutter/box_{i}",
+            position=[x, y, 1.0],
+            size=size,
+            color=[random.random(), random.random(), random.random()]
+        )
+        objects.append(obj)
+    return objects
+
+clutter = spawn_clutter(50)
+```
+
+## Cameras and Sensors
+
+### Adding a Camera
+
+**RGB Camera**:
+```python
+from omni.isaac.core.utils.prims import create_prim
+
+# Create camera prim
+camera_prim = create_prim(
+    prim_path="/World/Camera",
+    prim_type="Camera",
+    position=[2, 2, 1.5],
+    orientation=[0.92, -0.38, 0, 0]  # Look at origin
+)
+
+# Configure camera properties
+from pxr import UsdGeom
+camera = UsdGeom.Camera(camera_prim)
+camera.CreateFocalLengthAttr(24.0)  # Wide angle
+camera.CreateHorizontalApertureAttr(20.955)
+```
+
+**Attach Camera to Robot**:
+```python
+# Parent camera to robot head
+from pxr import Sdf
+camera_prim.GetReferences().AddInternalReference(
+    Sdf.Path("/World/Robot/head")
+)
+```
+
+### Depth Camera (Stereo Vision)
+
+```python
+from omni.isaac.range_sensor import _range_sensor
+
+# Create lidar sensor
+lidar = _range_sensor.acquire_lidar_sensor_interface()
+
+# Configure as stereo depth camera
+lidar_config = _range_sensor.SensorConfig()
+lidar_config.horizontal_fov = 90.0
+lidar_config.vertical_fov = 60.0
+lidar_config.horizontal_resolution = 640
+lidar_config.vertical_resolution = 480
+lidar_config.rotation_rate = 0.0  # Static camera
+lidar_config.max_range = 10.0
+
+lidar.add_lidar_sensor(
+    "/World/Robot/depth_camera",
+    parent="/World/Robot/head",
+    config=lidar_config
+)
+```
+
+## Physics Configuration
+
+### Articulation Settings (Humanoid)
+
+**Configure Joints**:
+```python
+from pxr import UsdPhysics
+
+# Get robot articulation root
+robot_prim = world.stage.GetPrimAtPath("/World/Robot")
+articulation = UsdPhysics.ArticulationRootAPI.Apply(robot_prim)
+
+# Set solver parameters for stability
+articulation.CreateSolverPositionIterationCountAttr(32)
+articulation.CreateSolverVelocityIterationCountAttr(8)
+articulation.CreateEnabledSelfCollisionsAttr(False)  # Disable for humanoids
+```
+
+**Joint Drives** (Control):
+```python
+# Configure hip joint for position control
+hip_joint = world.stage.GetPrimAtPath("/World/Robot/hip_joint")
+drive = UsdPhysics.DriveAPI.Apply(hip_joint, "angular")
+drive.CreateDampingAttr(1000.0)   # Damping coefficient
+drive.CreateStiffnessAttr(10000.0)  # Position gain
+drive.CreateMaxForceAttr(500.0)   # Torque limit (Nm)
+```
+
+### Contact Reporting (Foot Sensors)
+
+```python
+from omni.isaac.core.utils.physics import set_contact_report_callback
+
+def on_contact(contact_headers, contact_data):
+    """Called when foot touches ground."""
+    for header in contact_headers:
+        print(f"Contact: {header.actor0} <-> {header.actor1}")
+        # Check if left foot touching ground
+        if "/left_foot" in header.actor0:
+            print("Left foot contact!")
+
+# Enable contact reporting for left foot
+left_foot = world.stage.GetPrimAtPath("/World/Robot/left_foot")
+contact_api = UsdPhysics.ContactReportAPI.Apply(left_foot)
+set_contact_report_callback(on_contact)
+```
+
+## Running Simulations
+
+### Basic Simulation Loop
+
+```python
+from omni.isaac.core import World
+
+world = World()
+world.scene.add_default_ground_plane()
+
+# Add your robot, objects, etc.
+# ...
+
+# Initialize physics
+world.reset()
+
+# Simulation loop
+for i in range(1000):
+    # Apply control
+    robot.apply_action(...)  # From Module 2 controllers
+
+    # Step physics (60 Hz default)
+    world.step(render=True)
+
+    # Read sensors
+    camera_data = camera.get_rgba()
+    depth_data = depth_camera.get_depth()
+
+simulation_app.close()
+```
+
+### Real-Time Factor Control
+
+```python
+# Run faster than real-time (for training)
+world.set_simulation_dt(physics_dt=1.0/240.0, rendering_dt=1.0/60.0)
+
+# Run at specific speed
+for i in range(1000):
+    world.step(render=True)
+    time.sleep(1.0 / 60.0)  # Limit to 60 FPS
+```
+
+## Saving and Loading Scenes
+
+### Save as USD
+
+```python
+# Save current scene
+stage = world.stage
+stage.Export("my_humanoid_scene.usd")
+```
+
+### Load Saved Scene
+
+```python
+from pxr import Usd
+
+stage = Usd.Stage.Open("my_humanoid_scene.usd")
+world = World(stage=stage)
+world.reset()
+```
+
+## ROS 2 Bridge
+
+### Enable ROS 2 Communication
+
+```python
+# Enable Isaac Sim ROS 2 extension
+import omni.isaac.core.utils.extensions as extensions_utils
+extensions_utils.enable_extension("omni.isaac.ros2_bridge")
+
+# Publish camera images
+from omni.isaac.ros2_bridge import ROS2CameraHelper
+ros2_camera = ROS2CameraHelper(
+    camera_prim_path="/World/Camera",
+    topic_name="/camera/image_raw",
+    frame_id="camera_link"
+)
+```
+
+**Result**: Camera images published to `/camera/image_raw` topic (viewable in RViz).
+
+## Summary
+
+Isaac Sim enables:
+- **Photorealistic rendering**: RTX ray-tracing for realistic visuals
+- **Flexible robot import**: URDF, USD, procedural generation
+- **Advanced physics**: PhysX 5 for accurate humanoid dynamics
+- **Sensor simulation**: RGB, depth, lidar, contact sensors
+- **ROS 2 integration**: Seamless connection to ROS 2 ecosystem
+
+**Next**: Synthetic data generation and domain randomization for AI training!
+
+---
+
+:::tip Key Takeaways
+- **USD Format**: Universal Scene Description for interoperability
+- **Robot Import**: URDF → USD conversion for existing models
+- **PhysX Configuration**: Solver iterations, joint drives, contact reporting
+- **Cameras**: RGB + depth sensors for perception
+- **ROS 2 Bridge**: Publish sensor data to ROS 2 topics
+- **Photorealism**: PBR materials + RTX rendering = minimal reality gap
+:::
+
+## Exercises
+
+1. **Build a Room**: Create a 5m × 5m room with walls, floor, ceiling
+2. **Import Humanoid**: Load a URDF humanoid robot into Isaac Sim
+3. **Add Sensors**: Attach RGB and depth cameras to robot head
+4. **Physics Test**: Drop 100 random objects, verify realistic collisions
+5. **ROS 2 Stream**: Publish camera feed to ROS 2, view in RViz
+
+## Further Reading
+
+- [Isaac Sim Python API Reference](https://docs.omniverse.nvidia.com/py/isaacsim/index.html)
+- [USD Tutorials](https://graphics.pixar.com/usd/docs/index.html)
+- [PhysX Documentation](https://nvidia-omniverse.github.io/PhysX/physx/5.1.0/index.html)

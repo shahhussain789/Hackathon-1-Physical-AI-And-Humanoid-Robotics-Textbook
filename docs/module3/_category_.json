@@ -1,0 +1,12 @@
+{
+  "label": "Module 3: The AI-Robot Brain (NVIDIA Isaac™)",
+  "position": 4,
+  "collapsible": true,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Module 3: The AI-Robot Brain",
+    "description": "Master NVIDIA Isaac ecosystem for advanced perception, photorealistic simulation, and autonomous navigation in humanoid robotics.",
+    "keywords": ["nvidia isaac", "isaac sim", "isaac ros", "vslam", "nav2", "perception", "synthetic data"]
+  }
+}

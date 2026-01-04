@@ -1,0 +1,647 @@
+---
+title: LLM Cognitive Planning for Robotics
+sidebar_label: LLM Cognitive Planning
+sidebar_position: 4
+description: Use Large Language Models (GPT-4, Claude, LLaMA) to translate natural language commands into executable ROS 2 action sequences for humanoid robots.
+keywords: [llm planning, gpt-4, claude, llama, langchain, cognitive planning, task decomposition, ros2 actions]
+tags: [module4, llm, planning, gpt-4, langchain]
+---
+
+# LLM Cognitive Planning for Robotics
+
+## Introduction
+
+**The Challenge**: Voice command "Clean the table" → What robot actions?
+
+**Traditional Approach**: Manual programming for every possible command.
+
+**LLM Approach**: Let the AI figure it out!
+
+This chapter teaches you to use **Large Language Models** as the "brain" for high-level task planning.
+
+## LLM Options for Robotics
+
+### Comparison
+
+| Model | Provider | Parameters | Context | Cost | Best For |
+|-------|----------|------------|---------|------|----------|
+| **GPT-4 Turbo** | OpenAI | ~1.7T | 128k tokens | $$ | Production, complex reasoning |
+| **GPT-3.5 Turbo** | OpenAI | 175B | 16k tokens | $ | Fast prototyping |
+| **Claude 3.5 Sonnet** | Anthropic | ~Unknown | 200k tokens | $$ | Long context, safety-critical |
+| **Gemini 1.5 Pro** | Google | ~Unknown | 2M tokens! | $$ | Multimodal (vision+text) |
+| **LLaMA 3 (70B)** | Meta | 70B | 8k tokens | Free (local) | Privacy, offline robots |
+| **Mistral** | Mistral AI | 7-70B | 32k tokens | Free (local) | Edge deployment |
+
+**For This Module**: We'll use **GPT-4** (best reasoning) with fallback to **LLaMA 3** (local alternative).
+
+## Setup
+
+### OpenAI API
+
+```bash
+# Install
+pip install openai langchain langchain-openai
+
+# Set API key
+export OPENAI_API_KEY="sk-..."
+```
+
+**Test**:
+```python
+from openai import OpenAI
+
+client = OpenAI()
+response = client.chat.completions.create(
+    model="gpt-4-turbo",
+    messages=[{"role": "user", "content": "Hello, robot brain!"}]
+)
+print(response.choices[0].message.content)
+```
+
+### LangChain (LLM Orchestration)
+
+**LangChain** simplifies LLM integration:
+```bash
+pip install langchain langchain-openai
+```
+
+**Basic Usage**:
+```python
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+
+# Initialize LLM
+llm = ChatOpenAI(model="gpt-4-turbo", temperature=0)
+
+# Create prompt
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful robot assistant."),
+    ("user", "{input}")
+])
+
+# Chain
+chain = prompt | llm
+
+# Invoke
+response = chain.invoke({"input": "How do I grasp a cup?"})
+print(response.content)
+```
+
+## Prompt Engineering for Robotics
+
+### The Foundation: System Prompt
+
+**System prompt** defines the LLM's role and constraints.
+
+**Example**:
+```python
+ROBOT_SYSTEM_PROMPT = """
+You are an AI planner for a humanoid robot with the following capabilities:
+
+**Available Actions:**
+1. navigate_to(location: str) - Move to a location (kitchen, bedroom, table)
+2. detect_object(name: str) -> object_id - Find an object using computer vision
+3. grasp_object(object_id: int) - Pick up an object
+4. release_object() - Drop/place the object
+5. open_gripper() / close_gripper() - Control gripper
+6. say(text: str) - Speak to the user
+
+**Constraints:**
+- You can only perform actions from the list above
+- Always detect objects before grasping
+- Navigate before attempting manipulation
+- Check grasp success before moving
+
+**Output Format:**
+Return a JSON list of actions with parameters.
+
+Example:
+User: "Bring me the cup from the kitchen"
+Output:
+[
+  {"action": "navigate_to", "params": {"location": "kitchen"}},
+  {"action": "detect_object", "params": {"name": "cup"}},
+  {"action": "grasp_object", "params": {"object_id": "$detected"}},
+  {"action": "navigate_to", "params": {"location": "user"}},
+  {"action": "release_object", "params": {}},
+  {"action": "say", "params": {"text": "Here is your cup"}}
+]
+"""
+```
+
+### Chain-of-Thought Prompting
+
+**Problem**: Direct planning can miss steps.
+
+**Solution**: Ask LLM to "think out loud" first.
+
+```python
+COT_PROMPT = """
+User command: "{command}"
+
+Think step-by-step:
+1. What is the goal?
+2. What actions are needed?
+3. What are potential failures?
+
+Then provide the action plan as JSON.
+"""
+```
+
+**Example**:
+```
+Command: "Clean the table"
+
+LLM Reasoning:
+1. Goal: Remove objects from table
+2. Actions needed:
+   - Navigate to table
+   - Detect objects on table
+   - For each object: grasp, move to storage
+3. Potential failures:
+   - Object too heavy
+   - Table not reachable
+   - Gripper failure
+
+Action Plan:
+[
+  {"action": "navigate_to", "params": {"location": "table"}},
+  {"action": "detect_object", "params": {"name": "any"}},
+  ...
+]
+```
+
+**Result**: More robust plans.
+
+## Task Decomposition
+
+### Hierarchical Planning
+
+**Break complex tasks into subtasks:**
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+import json
+
+class RobotPlanner:
+    def __init__(self):
+        self.llm = ChatOpenAI(model="gpt-4-turbo", temperature=0)
+
+    def plan_task(self, user_command):
+        """Generate action plan from natural language."""
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", ROBOT_SYSTEM_PROMPT),
+            ("user", """
+User command: {command}
+
+Provide a detailed action plan as JSON array.
+Each action should have 'action' and 'params' fields.
+            """)
+        ])
+
+        chain = prompt | self.llm
+        response = chain.invoke({"command": user_command})
+
+        # Parse JSON from response
+        try:
+            plan = json.loads(response.content)
+            return plan
+        except json.JSONDecodeError:
+            # Sometimes LLM adds markdown formatting
+            # Extract JSON from ```json ... ``` block
+            import re
+            match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
+            if match:
+                return json.loads(match.group(1))
+            else:
+                raise ValueError("Failed to parse LLM response")
+
+
+# Usage
+planner = RobotPlanner()
+plan = planner.plan_task("Go to the kitchen and bring me a spoon")
+
+print(json.dumps(plan, indent=2))
+```
+
+**Output**:
+```json
+[
+  {"action": "navigate_to", "params": {"location": "kitchen"}},
+  {"action": "detect_object", "params": {"name": "spoon"}},
+  {"action": "grasp_object", "params": {"object_id": "$detected"}},
+  {"action": "navigate_to", "params": {"location": "user"}},
+  {"action": "release_object", "params": {}},
+  {"action": "say", "params": {"text": "Here is your spoon"}}
+]
+```
+
+## ROS 2 Integration
+
+### Architecture
+
+```
+Voice Command → LLM Planner → Action Executor → Robot (Nav2, MoveIt2)
+```
+
+### Action Executor Node
+
+**`llm_action_executor.py`**:
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from std_msgs.msg import String
+from nav2_msgs.action import NavigateToPose
+from geometry_msgs.msg import PoseStamped
+import json
+
+class LLMActionExecutor(Node):
+    def __init__(self):
+        super().__init__('llm_action_executor')
+
+        # Subscribe to voice commands
+        self.sub = self.create_subscription(
+            String, 'voice_commands', self.command_callback, 10
+        )
+
+        # Action clients
+        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
+        # LLM planner
+        from llm_planner import RobotPlanner
+        self.planner = RobotPlanner()
+
+        # Known locations (from map)
+        self.locations = {
+            "kitchen": (5.0, 2.0, 0.0),
+            "bedroom": (-3.0, 4.0, 0.0),
+            "table": (1.0, 1.5, 0.0),
+            "user": (0.0, 0.0, 0.0),
+        }
+
+        self.get_logger().info("LLM Action Executor ready")
+
+    def command_callback(self, msg):
+        """Process voice command via LLM."""
+        command = msg.data
+        self.get_logger().info(f"Received command: {command}")
+
+        # Get plan from LLM
+        try:
+            plan = self.planner.plan_task(command)
+            self.get_logger().info(f"LLM Plan: {json.dumps(plan, indent=2)}")
+
+            # Execute plan
+            self.execute_plan(plan)
+
+        except Exception as e:
+            self.get_logger().error(f"Planning failed: {e}")
+
+    def execute_plan(self, plan):
+        """Execute action sequence."""
+        for step in plan:
+            action = step["action"]
+            params = step["params"]
+
+            self.get_logger().info(f"Executing: {action} with {params}")
+
+            if action == "navigate_to":
+                self.navigate_to(params["location"])
+            elif action == "detect_object":
+                self.detect_object(params["name"])
+            elif action == "grasp_object":
+                self.grasp_object(params.get("object_id"))
+            elif action == "release_object":
+                self.release_object()
+            elif action == "say":
+                self.say(params["text"])
+            else:
+                self.get_logger().warn(f"Unknown action: {action}")
+
+    def navigate_to(self, location):
+        """Navigate to named location."""
+        if location not in self.locations:
+            self.get_logger().error(f"Unknown location: {location}")
+            return
+
+        x, y, theta = self.locations[location]
+        self.get_logger().info(f"Navigating to {location} at ({x}, {y})")
+
+        # Create Nav2 goal
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = 'map'
+        goal_msg.pose.pose.position.x = x
+        goal_msg.pose.pose.position.y = y
+        goal_msg.pose.pose.orientation.w = 1.0
+
+        # Send goal and wait
+        self.nav_client.wait_for_server()
+        future = self.nav_client.send_goal_async(goal_msg)
+
+        # Block until complete (simplified; use callbacks in production)
+        rclpy.spin_until_future_complete(self, future)
+        goal_handle = future.result()
+
+        if goal_handle.accepted:
+            self.get_logger().info("Navigation goal accepted")
+            result_future = goal_handle.get_result_async()
+            rclpy.spin_until_future_complete(self, result_future)
+            self.get_logger().info("Navigation complete!")
+        else:
+            self.get_logger().error("Navigation goal rejected")
+
+    def detect_object(self, name):
+        """Detect object using vision (placeholder)."""
+        self.get_logger().info(f"Detecting object: {name}")
+        # TODO: Call Isaac ROS object detection (Module 3)
+        # For now, simulate success
+        self.detected_object_id = 1
+
+    def grasp_object(self, object_id):
+        """Grasp object (placeholder)."""
+        self.get_logger().info(f"Grasping object ID: {object_id}")
+        # TODO: Call MoveIt 2 for grasp planning (Module 2)
+
+    def release_object(self):
+        """Release grasped object."""
+        self.get_logger().info("Releasing object")
+        # TODO: Open gripper
+
+    def say(self, text):
+        """Text-to-speech."""
+        self.get_logger().info(f"Robot says: {text}")
+        # TODO: Use TTS library (pyttsx3, espeak)
+
+
+def main():
+    rclpy.init()
+    node = LLMActionExecutor()
+    rclpy.spin(node)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+**Test**:
+```bash
+# Terminal 1: Start executor
+ros2 run my_robot llm_action_executor.py
+
+# Terminal 2: Send voice command
+ros2 topic pub /voice_commands std_msgs/msg/String "data: 'Go to the kitchen and find a spoon'"
+```
+
+**Output**:
+```
+[INFO] [llm_action_executor]: Received command: Go to the kitchen and find a spoon
+[INFO] [llm_action_executor]: LLM Plan:
+[
+  {"action": "navigate_to", "params": {"location": "kitchen"}},
+  {"action": "detect_object", "params": {"name": "spoon"}},
+  ...
+]
+[INFO] [llm_action_executor]: Executing: navigate_to with {'location': 'kitchen'}
+[INFO] [llm_action_executor]: Navigating to kitchen at (5.0, 2.0)
+[INFO] [llm_action_executor]: Navigation complete!
+[INFO] [llm_action_executor]: Executing: detect_object with {'name': 'spoon'}
+```
+
+## Advanced Techniques
+
+### 1. Few-Shot Prompting
+
+**Teach LLM with examples:**
+
+```python
+FEW_SHOT_EXAMPLES = """
+Example 1:
+User: "Bring me a glass of water"
+Plan:
+[
+  {"action": "navigate_to", "params": {"location": "kitchen"}},
+  {"action": "detect_object", "params": {"name": "glass"}},
+  {"action": "grasp_object", "params": {"object_id": "$detected"}},
+  {"action": "navigate_to", "params": {"location": "sink"}},
+  {"action": "say", "params": {"text": "Filling glass with water"}},
+  {"action": "navigate_to", "params": {"location": "user"}},
+  {"action": "release_object", "params": {}}
+]
+
+Example 2:
+User: "Clean the table"
+Plan:
+[
+  {"action": "navigate_to", "params": {"location": "table"}},
+  {"action": "detect_object", "params": {"name": "any"}},
+  {"action": "grasp_object", "params": {"object_id": "$detected"}},
+  {"action": "navigate_to", "params": {"location": "trash"}},
+  {"action": "release_object", "params": {}}
+]
+
+Now plan for:
+User: "{command}"
+Plan:
+"""
+```
+
+**Result**: More consistent output format.
+
+### 2. Affordance Grounding (SayCan Approach)
+
+**Problem**: LLM suggests impossible actions.
+
+**Solution**: Score each action by feasibility.
+
+```python
+class AffordanceGroundedPlanner:
+    def __init__(self, robot_state):
+        self.llm = ChatOpenAI(model="gpt-4-turbo")
+        self.robot_state = robot_state  # Current capabilities
+
+    def plan_with_affordances(self, command):
+        """Generate plan, filtering by affordances."""
+
+        # Get candidate actions from LLM
+        candidates = self.llm_generate_candidates(command)
+
+        # Score each by feasibility
+        grounded_plan = []
+        for action in candidates:
+            feasibility = self.check_affordance(action)
+            if feasibility > 0.5:  # Threshold
+                grounded_plan.append(action)
+            else:
+                self.get_logger().warn(f"Infeasible action: {action}")
+
+        return grounded_plan
+
+    def check_affordance(self, action):
+        """Check if robot can perform action."""
+        if action["action"] == "navigate_to":
+            # Can robot reach location?
+            location = action["params"]["location"]
+            return self.robot_state.can_reach(location)  # Nav2 feasibility check
+
+        elif action["action"] == "grasp_object":
+            # Is object within reach?
+            return self.robot_state.object_in_workspace()
+
+        # Default: assume feasible
+        return 1.0
+```
+
+### 3. Replanning on Failure
+
+**Closed-loop execution**:
+
+```python
+def execute_with_replanning(self, plan, max_retries=3):
+    """Execute plan with automatic replanning on failure."""
+
+    for attempt in range(max_retries):
+        for step in plan:
+            success = self.execute_action(step)
+
+            if not success:
+                self.get_logger().warn(f"Action failed: {step}")
+
+                # Ask LLM to replan
+                context = {
+                    "failed_action": step,
+                    "current_state": self.get_robot_state(),
+                    "remaining_goal": self.original_command
+                }
+
+                new_plan = self.planner.replan(context)
+                self.get_logger().info(f"Replanning: {new_plan}")
+
+                return self.execute_with_replanning(new_plan, max_retries - 1)
+
+    self.get_logger().error("Max retries reached, task failed")
+```
+
+**LLM Replanning Prompt**:
+```python
+REPLAN_PROMPT = """
+The robot attempted this action but it failed:
+{failed_action}
+
+Current robot state:
+{current_state}
+
+Original goal:
+{original_goal}
+
+Please provide an alternative plan to achieve the goal.
+"""
+```
+
+### 4. Safety Constraints
+
+**Critical**: Prevent LLM from generating unsafe actions.
+
+```python
+SAFETY_RULES = {
+    "max_velocity": 0.5,  # m/s
+    "max_force": 10.0,    # N
+    "forbidden_areas": ["stairs", "outside"],
+}
+
+def validate_action(self, action):
+    """Check action against safety rules."""
+
+    if action["action"] == "navigate_to":
+        location = action["params"]["location"]
+        if location in SAFETY_RULES["forbidden_areas"]:
+            self.get_logger().error(f"Safety violation: Cannot go to {location}")
+            return False
+
+    if action["action"] == "grasp_object":
+        # Check force limits before grasping
+        if action["params"].get("force", 0) > SAFETY_RULES["max_force"]:
+            self.get_logger().error("Safety violation: Force too high")
+            return False
+
+    return True
+```
+
+## Local LLM Alternative (LLaMA 3)
+
+**For offline/privacy-sensitive robots:**
+
+```bash
+# Install Ollama (local LLM runtime)
+curl https://ollama.ai/install.sh | sh
+
+# Download LLaMA 3
+ollama pull llama3:70b
+```
+
+**Usage**:
+```python
+from langchain_community.llms import Ollama
+
+# Use local LLaMA instead of OpenAI
+llm = Ollama(model="llama3:70b")
+
+# Same interface as before
+prompt = ChatPromptTemplate.from_messages([
+    ("system", ROBOT_SYSTEM_PROMPT),
+    ("user", "{command}")
+])
+
+chain = prompt | llm
+response = chain.invoke({"command": "Go to the kitchen"})
+```
+
+**Trade-off**: Slower inference (~2-5 seconds), but fully offline.
+
+## Summary
+
+LLM cognitive planning enables:
+- **Natural language** → Robot actions
+- **Task decomposition**: Complex commands → action sequences
+- **Reasoning**: Common sense understanding
+- **Replanning**: Adapt to failures
+- **Safety**: Constrained by affordances and rules
+
+**Key Libraries**:
+- LangChain (LLM orchestration)
+- OpenAI API (GPT-4)
+- Ollama (local LLMs)
+
+**Next**: Integrate vision for visual grounding (VLA)!
+
+---
+
+:::tip Key Takeaways
+- **LLMs as Planners**: GPT-4, Claude translate language → actions
+- **Prompt Engineering**: System prompts define robot capabilities
+- **Chain-of-Thought**: Better reasoning with step-by-step thinking
+- **ROS 2 Integration**: LLM plans → Action executor → Robot
+- **Affordance Grounding**: Filter infeasible actions (SayCan)
+- **Replanning**: Closed-loop execution handles failures
+- **Safety**: Validate actions against constraints
+- **Local Alternative**: LLaMA 3 for offline operation
+:::
+
+## Exercises
+
+1. **Prompt Design**: Write system prompt for a warehouse robot with different actions
+2. **Few-Shot**: Add 3 examples to improve LLM plan quality
+3. **Integrate**: Connect LLM planner to ROS 2 action executor
+4. **Affordances**: Implement feasibility checker for 3 action types
+5. **Compare**: Test GPT-4 vs. LLaMA 3 on same tasks, measure quality & latency
+
+## Further Reading
+
+- [LangChain Documentation](https://python.langchain.com/)
+- [OpenAI API Reference](https://platform.openai.com/docs/api-reference)
+- [SayCan Paper: "Do As I Can, Not As I Say"](https://say-can.github.io/)
+- [Chain-of-Thought Prompting](https://arxiv.org/abs/2201.11903)
+- [Ollama for Local LLMs](https://ollama.ai/)

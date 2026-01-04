@@ -1,0 +1,190 @@
+---
+title: Robot Dynamics - Forces, Torques, and Equations of Motion
+sidebar_label: Robot Dynamics
+sidebar_position: 3
+description: Understand how forces and torques cause robot motion through Lagrangian mechanics and the Newton-Euler formulation.
+keywords: [robot dynamics, lagrangian mechanics, newton-euler, torque, inertia]
+tags: [module2, dynamics, physics]
+---
+
+# Robot Dynamics: Forces, Torques, and Equations of Motion
+
+## Introduction
+
+**Kinematics** tells us *where* the robot is. **Dynamics** tells us *how* it got there—the forces and torques that cause motion.
+
+Understanding dynamics is essential for:
+- **Control design**: Predicting how torques affect motion
+- **Simulation**: Realistic physics in Gazebo/Isaac Sim
+- **Energy efficiency**: Minimizing effort for tasks
+
+## The Dynamic Equation of Motion
+
+For a robot with n joints:
+
+```
+τ = M(θ)θ̈ + C(θ, θ̇)θ̇ + G(θ)
+
+where:
+- τ = [τ₁, ..., τₙ]ᵀ joint torques (control inputs)
+- M(θ) = n×n inertia matrix
+- C(θ, θ̇) = Coriolis and centrifugal forces
+- G(θ) = gravity vector
+- θ̈ = joint accelerations
+```
+
+**Interpretation**:
+- **M(θ)θ̈**: Inertial forces (resistance to acceleration)
+- **C(θ, θ̇)θ̇**: Velocity-dependent forces
+- **G(θ)**: Gravitational forces
+
+## Lagrangian Formulation
+
+### Energy-Based Approach
+
+Define:
+- **Kinetic Energy**: T(θ, θ̇)
+- **Potential Energy**: V(θ)
+- **Lagrangian**: L = T - V
+
+**Euler-Lagrange Equation**:
+```
+τᵢ = d/dt(∂L/∂θ̇ᵢ) - ∂L/∂θᵢ
+```
+
+### Example: 2-Link Arm
+
+**Kinetic Energy**:
+```
+T = ½m₁v₁² + ½I₁ω₁² + ½m₂v₂² + ½I₂ω₂²
+```
+
+**Potential Energy**:
+```
+V = m₁gh₁ + m₂gh₂
+```
+
+**Resulting Dynamics** (after algebra):
+```
+M(θ) = [m₁L₁²+m₂(L₁²+L₂²+2L₁L₂c₂)  m₂(L₂²+L₁L₂c₂)]
+       [m₂(L₂²+L₁L₂c₂)               m₂L₂²        ]
+
+C(θ,θ̇) = [-m₂L₁L₂s₂θ̇₂  -m₂L₁L₂s₂(θ̇₁+θ̇₂)]
+         [ m₂L₁L₂s₂θ̇₁   0                 ]
+
+G(θ) = [-(m₁+m₂)gL₁s₁ - m₂gL₂s₁₂]
+       [-m₂gL₂s₁₂              ]
+```
+
+Where s₂ = sin(θ₂), c₂ = cos(θ₂), s₁₂ = sin(θ₁+θ₂).
+
+## Simulation with Dynamics
+
+### Forward Dynamics
+
+**Given**: Current state (θ, θ̇) and torques τ
+
+**Find**: Accelerations θ̈
+
+**Solution**:
+```
+θ̈ = M⁻¹(θ)[τ - C(θ,θ̇)θ̇ - G(θ)]
+```
+
+**Numerical Integration** (Euler method):
+```python
+def simulate_dynamics(theta, theta_dot, tau, dt=0.001):
+    """One timestep of forward dynamics."""
+    M = inertia_matrix(theta)
+    C = coriolis_matrix(theta, theta_dot)
+    G = gravity_vector(theta)
+
+    # Compute accelerations
+    theta_ddot = np.linalg.inv(M) @ (tau - C @ theta_dot - G)
+
+    # Integrate
+    theta_new = theta + theta_dot * dt
+    theta_dot_new = theta_dot + theta_ddot * dt
+
+    return theta_new, theta_dot_new
+```
+
+### Inverse Dynamics
+
+**Given**: Desired trajectory (θ_d, θ̇_d, θ̈_d)
+
+**Find**: Required torques τ
+
+**Solution**: Direct computation:
+```
+τ = M(θ_d)θ̈_d + C(θ_d, θ̇_d)θ̇_d + G(θ_d)
+```
+
+**Use Case**: Feedforward control (covered in next chapter).
+
+## Contact Dynamics
+
+### Ground Contact (Walking)
+
+**Challenge**: Foot-ground contact creates **impulsive forces** (sudden changes).
+
+**Model**:
+- **Stance phase**: Foot fixed → constraint forces
+- **Swing phase**: Foot free → no contact
+- **Impact**: Foot strikes ground → velocity discontinuity
+
+**Example** (simple hopper):
+```python
+def handle_ground_contact(z, z_dot, k_ground=10000, damping=100):
+    """Model ground as spring-damper."""
+    if z < 0:  # Below ground
+        F_contact = -k_ground * z - damping * z_dot
+    else:
+        F_contact = 0
+    return F_contact
+```
+
+## Friction and Damping
+
+### Joint Friction
+
+**Viscous friction**: τ_friction = -b θ̇ (linear in velocity)
+
+**Coulomb friction**: τ_friction = -sign(θ̇) τ_c (constant magnitude)
+
+**Combined model**:
+```
+τ_friction = -b θ̇ - sign(θ̇) τ_c
+```
+
+### Effect on Control
+
+**Problem**: Friction dissipates energy, affects trajectory tracking.
+
+**Solution**: Include friction in dynamics model or compensate in controller.
+
+## Summary
+
+Robot dynamics describes how forces cause motion:
+- **Equation of motion**: τ = M(θ)θ̈ + C(θ,θ̇)θ̇ + G(θ)
+- **Forward dynamics**: Torques → accelerations (for simulation)
+- **Inverse dynamics**: Desired motion → required torques (for control)
+- **Contact dynamics**: Handle impacts and constraints
+- **Friction**: Affects energy and tracking accuracy
+
+**Next**: Using dynamics to design **controllers** that achieve desired behavior.
+
+---
+
+:::tip Key Takeaways
+- Dynamics: Forces/torques ↔ motion
+- M(θ)θ̈ + C(θ,θ̇)θ̇ + G(θ) = τ
+- Forward dynamics: Simulate motion
+- Inverse dynamics: Compute required torques
+- Contact & friction: Critical for realistic simulation
+:::
+
+## Further Reading
+
+- "Modern Robotics" Chapter 8: Dynamics of Open Chains
+- Featherstone (2008): "Rigid Body Dynamics Algorithms"

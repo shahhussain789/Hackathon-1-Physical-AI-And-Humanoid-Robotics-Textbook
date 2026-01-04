@@ -1,0 +1,614 @@
+---
+title: Vision-Language Grounding for VLA
+sidebar_label: Vision-Language Grounding
+sidebar_position: 5
+description: Ground language commands in visual perception using CLIP, BLIP, and multimodal models for object recognition and scene understanding.
+keywords: [vision language models, clip, blip, visual grounding, multimodal ai, zero-shot detection, vqa]
+tags: [module4, vision-language, clip, grounding]
+---
+
+# Vision-Language Grounding for VLA
+
+## Introduction
+
+**The Grounding Problem**:
+```
+User: "Pick up the RED cup"
+```
+
+**Challenge**: How does the robot know which pixels correspond to "red cup"?
+
+**Solution**: **Vision-Language models** that connect text and images.
+
+This chapter integrates visual perception with language understanding.
+
+## Vision-Language Models Overview
+
+### Key Models
+
+| Model | Developer | Capability | Use Case |
+|-------|-----------|------------|----------|
+| **CLIP** | OpenAI | Zero-shot image classification | Object recognition |
+| **BLIP-2** | Salesforce | Visual Q&A, captioning | Scene understanding |
+| **LLaVA** | Microsoft | Multimodal conversation | Complex reasoning |
+| **Gemini Vision** | Google | VLM in LLM | End-to-end VLA |
+| **GPT-4 Vision** | OpenAI | Image understanding | General-purpose |
+
+### CLIP: Contrastive Language-Image Pre-training
+
+**How CLIP Works**:
+1. Trained on 400M image-text pairs from the internet
+2. Learns to match images with their captions
+3. **Zero-shot**: Can recognize objects never seen during training
+
+**Architecture**:
+```
+Image → Vision Encoder → [Image Embedding]
+                              ↓ (Cosine Similarity)
+Text → Text Encoder → [Text Embedding]
+```
+
+**Example**:
+```python
+import clip
+import torch
+from PIL import Image
+
+# Load model
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load("ViT-B/32", device=device)
+
+# Load image
+image = Image.open("scene.jpg")
+image_input = preprocess(image).unsqueeze(0).to(device)
+
+# Text candidates
+text_candidates = ["a red cup", "a blue cup", "a green cup"]
+text_inputs = clip.tokenize(text_candidates).to(device)
+
+# Compute similarities
+with torch.no_grad():
+    image_features = model.encode_image(image_input)
+    text_features = model.encode_text(text_inputs)
+
+    # Normalize and compute cosine similarity
+    image_features /= image_features.norm(dim=-1, keepdim=True)
+    text_features /= text_features.norm(dim=-1, keepdim=True)
+    similarity = (image_features @ text_features.T).squeeze(0)
+
+    # Get best match
+    probs = similarity.softmax(dim=-1)
+    best_idx = probs.argmax()
+
+print(f"Best match: {text_candidates[best_idx]} (confidence: {probs[best_idx]:.2f})")
+```
+
+**Output**:
+```
+Best match: a red cup (confidence: 0.87)
+```
+
+## Grounding Objects in Scenes
+
+### Object Detection + CLIP
+
+**Pipeline**:
+```
+Camera Image → YOLOv8 (Detect all objects)
+                ↓
+         [bbox1: cup], [bbox2: bottle], [bbox3: plate]
+                ↓
+       Crop each bbox → CLIP matching
+                ↓
+         "Which is the RED cup?"
+                ↓
+         bbox1 with 0.85 confidence
+```
+
+**Implementation**:
+```python
+from ultralytics import YOLO
+import clip
+import torch
+from PIL import Image
+
+class VisionLanguageGrounder:
+    def __init__(self):
+        # Object detector
+        self.detector = YOLO("yolov8n.pt")
+
+        # CLIP for language grounding
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", self.device)
+
+    def ground_object(self, image_path, text_description):
+        """Find object in image matching text description."""
+
+        # Step 1: Detect all objects
+        results = self.detector(image_path)
+        detections = results[0].boxes
+
+        if len(detections) == 0:
+            return None, "No objects detected"
+
+        # Step 2: Crop each detection
+        image = Image.open(image_path)
+        best_match = None
+        best_score = 0
+
+        for i, box in enumerate(detections):
+            # Get bounding box
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            crop = image.crop((x1, y1, x2, y2))
+
+            # CLIP similarity
+            score = self.clip_similarity(crop, text_description)
+
+            if score > best_score:
+                best_score = score
+                best_match = {
+                    "bbox": (x1, y1, x2, y2),
+                    "score": score,
+                    "class": results[0].names[int(box.cls)]
+                }
+
+        return best_match, f"Found with confidence {best_score:.2f}"
+
+    def clip_similarity(self, image_crop, text):
+        """Compute CLIP similarity between image crop and text."""
+        image_input = self.clip_preprocess(image_crop).unsqueeze(0).to(self.device)
+        text_input = clip.tokenize([text]).to(self.device)
+
+        with torch.no_grad():
+            image_features = self.clip_model.encode_image(image_input)
+            text_features = self.clip_model.encode_text(text_input)
+
+            # Normalize and compute similarity
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            similarity = (image_features @ text_features.T).item()
+
+        return similarity
+
+
+# Usage
+grounder = VisionLanguageGrounder()
+result, msg = grounder.ground_object("table_scene.jpg", "a red ceramic mug")
+print(msg)
+print(f"Bounding box: {result['bbox']}")
+```
+
+**Output**:
+```
+Found with confidence 0.82
+Bounding box: (450, 320, 550, 480)
+```
+
+## ROS 2 Integration
+
+### Vision-Language Grounding Service
+
+**`vision_language_service.py`**:
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+from std_srvs.srv import Trigger
+from geometry_msgs.msg import Point
+import cv2
+import numpy as np
+
+class VisionLanguageService(Node):
+    def __init__(self):
+        super().__init__('vision_language_service')
+
+        # Image subscriber
+        self.bridge = CvBridge()
+        self.latest_image = None
+        self.image_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.image_callback, 10
+        )
+
+        # Service: Ground object
+        self.srv = self.create_service(
+            Trigger,  # Use custom srv in production
+            'ground_object',
+            self.ground_object_callback
+        )
+
+        # Vision-language grounder
+        from vision_language_grounder import VisionLanguageGrounder
+        self.grounder = VisionLanguageGrounder()
+
+        self.get_logger().info("Vision-Language Service ready")
+
+    def image_callback(self, msg):
+        """Store latest camera image."""
+        self.latest_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+
+    def ground_object_callback(self, request, response):
+        """Service to find object by description."""
+        # In production, use custom message with text field
+        text_description = "red cup"  # Would come from request
+
+        if self.latest_image is None:
+            response.success = False
+            response.message = "No camera image available"
+            return response
+
+        # Save image temporarily
+        cv2.imwrite("/tmp/current_scene.jpg", self.latest_image)
+
+        # Ground object
+        result, msg = self.grounder.ground_object("/tmp/current_scene.jpg", text_description)
+
+        if result:
+            response.success = True
+            response.message = f"Found object: {msg}"
+            # In production, return bbox or 3D point in response
+            self.get_logger().info(f"Grounded '{text_description}' at {result['bbox']}")
+        else:
+            response.success = False
+            response.message = "Object not found"
+
+        return response
+
+
+def main():
+    rclpy.init()
+    node = VisionLanguageService()
+    rclpy.spin(node)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+**Call Service**:
+```bash
+ros2 service call /ground_object std_srvs/srv/Trigger
+```
+
+## Visual Question Answering (VQA)
+
+### BLIP-2 for Scene Understanding
+
+**Use Case**: "Is the cup full or empty?"
+
+```python
+from transformers import Blip2Processor, Blip2ForConditionalGeneration
+from PIL import Image
+import torch
+
+class VisualQA:
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
+        self.model = Blip2ForConditionalGeneration.from_pretrained(
+            "Salesforce/blip2-opt-2.7b", torch_dtype=torch.float16
+        ).to(self.device)
+
+    def answer_question(self, image_path, question):
+        """Answer question about image."""
+        image = Image.open(image_path)
+
+        inputs = self.processor(image, question, return_tensors="pt").to(self.device, torch.float16)
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(**inputs, max_new_tokens=20)
+
+        answer = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+        return answer
+
+
+# Usage
+vqa = VisualQA()
+answer = vqa.answer_question("cup_scene.jpg", "Is the cup full or empty?")
+print(f"Answer: {answer}")  # "The cup is full"
+```
+
+### Integration with LLM Planning
+
+**Enhanced planning with VQA**:
+
+```python
+class VLAPlanner:
+    def __init__(self):
+        self.llm_planner = RobotPlanner()  # From previous chapter
+        self.vqa = VisualQA()
+        self.grounder = VisionLanguageGrounder()
+
+    def plan_with_vision(self, user_command, scene_image_path):
+        """Plan task using vision context."""
+
+        # Step 1: Understand scene via VQA
+        scene_questions = [
+            "How many cups are on the table?",
+            "What color is the largest cup?",
+            "Is there a bottle on the table?"
+        ]
+
+        scene_context = {}
+        for q in scene_questions:
+            answer = self.vqa.answer_question(scene_image_path, q)
+            scene_context[q] = answer
+
+        # Step 2: Provide scene context to LLM
+        augmented_prompt = f"""
+User command: {user_command}
+
+Current scene:
+{scene_context}
+
+Generate action plan considering the scene.
+        """
+
+        plan = self.llm_planner.plan_task(augmented_prompt)
+
+        # Step 3: Ground object references
+        for step in plan:
+            if step["action"] == "grasp_object":
+                object_desc = step["params"]["name"]
+                result, _ = self.grounder.ground_object(scene_image_path, object_desc)
+                if result:
+                    step["params"]["bbox"] = result["bbox"]
+
+        return plan
+
+
+# Usage
+vla_planner = VLAPlanner()
+plan = vla_planner.plan_with_vision(
+    user_command="Bring me the red cup",
+    scene_image_path="table.jpg"
+)
+```
+
+## Multimodal LLMs (GPT-4 Vision)
+
+### Direct Image Understanding
+
+**GPT-4 Vision** can process images directly:
+
+```python
+from openai import OpenAI
+import base64
+
+class GPT4VisionPlanner:
+    def __init__(self):
+        self.client = OpenAI()
+
+    def encode_image(self, image_path):
+        """Encode image to base64."""
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+
+    def plan_from_image(self, user_command, image_path):
+        """Plan task using GPT-4 Vision."""
+
+        base64_image = self.encode_image(image_path)
+
+        response = self.client.chat.completions.create(
+            model="gpt-4-vision-preview",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a robot planner. Generate action sequences as JSON."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Task: {user_command}\n\nLooking at this scene, generate a step-by-step action plan."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500
+        )
+
+        plan_text = response.choices[0].message.content
+        # Parse JSON from response
+        import json
+        plan = json.loads(plan_text)
+        return plan
+
+
+# Usage
+gpt4v_planner = GPT4VisionPlanner()
+plan = gpt4v_planner.plan_from_image(
+    user_command="Clear the table",
+    image_path="messy_table.jpg"
+)
+```
+
+**GPT-4 Vision Output**:
+```json
+[
+  {
+    "action": "grasp_object",
+    "params": {
+      "description": "blue mug on the left",
+      "estimated_position": [0.3, 0.2, 0.1]
+    }
+  },
+  {
+    "action": "navigate_to",
+    "params": {"location": "sink"}
+  },
+  ...
+]
+```
+
+**Advantage**: Single model for vision + language + planning!
+
+## Spatial Reasoning
+
+### 3D Object Localization
+
+**From 2D bbox → 3D position**:
+
+```python
+import numpy as np
+
+def bbox_to_3d_point(bbox, depth_image, camera_intrinsics):
+    """Convert 2D bounding box to 3D point using depth."""
+
+    # Get center of bbox
+    x1, y1, x2, y2 = bbox
+    center_x = int((x1 + x2) / 2)
+    center_y = int((y1 + y2) / 2)
+
+    # Get depth at center
+    depth = depth_image[center_y, center_x]  # meters
+
+    # Camera intrinsics
+    fx, fy = camera_intrinsics['fx'], camera_intrinsics['fy']
+    cx, cy = camera_intrinsics['cx'], camera_intrinsics['cy']
+
+    # Back-project to 3D
+    z = depth
+    x = (center_x - cx) * z / fx
+    y = (center_y - cy) * z / fy
+
+    return np.array([x, y, z])
+
+
+# Usage
+camera_intrinsics = {'fx': 525, 'fy': 525, 'cx': 319.5, 'cy': 239.5}
+bbox = (450, 320, 550, 480)  # From CLIP grounding
+depth_image = cv2.imread("depth.png", cv2.IMREAD_UNCHANGED) / 1000.0  # Convert to meters
+
+object_3d_position = bbox_to_3d_point(bbox, depth_image, camera_intrinsics)
+print(f"Object at: {object_3d_position}")  # [0.42, 0.15, 0.68] meters
+```
+
+**Integration**:
+```python
+# After grounding, get 3D position
+result, _ = grounder.ground_object(rgb_image, "red cup")
+bbox = result["bbox"]
+position_3d = bbox_to_3d_point(bbox, depth_image, camera_intrinsics)
+
+# Pass to grasp planner
+grasp_pose = compute_grasp_pose(position_3d)  # From Module 2
+```
+
+## Complete VLA Pipeline
+
+### End-to-End Example
+
+```python
+class CompleteVLASystem:
+    def __init__(self):
+        self.whisper = WhisperNode()  # Speech recognition
+        self.llm_planner = RobotPlanner()  # Task planning
+        self.grounder = VisionLanguageGrounder()  # Visual grounding
+        self.executor = ActionExecutor()  # Robot control
+
+    def execute_command(self, audio_input, rgb_image, depth_image):
+        """Complete VLA pipeline."""
+
+        # 1. Speech to text
+        command_text = self.whisper.transcribe(audio_input)
+        print(f"User said: {command_text}")
+
+        # 2. LLM planning
+        plan = self.llm_planner.plan_task(command_text)
+        print(f"Plan: {plan}")
+
+        # 3. Visual grounding (for manipulation actions)
+        for step in plan:
+            if step["action"] == "grasp_object":
+                object_name = step["params"]["name"]
+
+                # Ground in image
+                result, _ = self.grounder.ground_object(rgb_image, object_name)
+
+                # Get 3D position
+                bbox = result["bbox"]
+                position_3d = bbox_to_3d_point(bbox, depth_image, camera_intrinsics)
+
+                # Update step with 3D pose
+                step["params"]["position"] = position_3d.tolist()
+
+        # 4. Execute actions
+        self.executor.execute_plan(plan)
+
+        return "Task completed!"
+
+
+# Usage
+vla_system = CompleteVLASystem()
+vla_system.execute_command(
+    audio_input="audio.wav",
+    rgb_image="scene.jpg",
+    depth_image="depth.png"
+)
+```
+
+**Flow**:
+```
+Audio: "Bring me the red cup"
+  ↓
+Whisper: "Bring me the red cup"
+  ↓
+LLM: [navigate_to(table), grasp_object(red cup), navigate_to(user)]
+  ↓
+CLIP: Grounds "red cup" to bbox [450, 320, 550, 480]
+  ↓
+Depth: 3D position [0.42, 0.15, 0.68]
+  ↓
+Executor: Navigate → Grasp at (0.42, 0.15, 0.68) → Return
+```
+
+## Summary
+
+Vision-language grounding connects:
+- **Text** ("red cup") ↔ **Image** (pixels)
+- Enables zero-shot object recognition
+- Powers visual question answering
+- Provides spatial context for manipulation
+
+**Key Models**:
+- CLIP (object matching)
+- BLIP-2 (VQA)
+- GPT-4 Vision (end-to-end VLA)
+
+**Next**: Safety and reliable action execution!
+
+---
+
+:::tip Key Takeaways
+- **Grounding**: Connect language to visual perception
+- **CLIP**: Zero-shot image-text matching (no training needed)
+- **Pipeline**: YOLOv8 (detect) + CLIP (match description)
+- **VQA**: BLIP-2 for scene understanding ("Is cup full?")
+- **GPT-4 Vision**: Multimodal LLM (image + text → plan)
+- **3D Localization**: 2D bbox + depth → 3D position
+- **Complete VLA**: Speech → LLM → Vision → Action
+:::
+
+## Exercises
+
+1. **CLIP Grounding**: Implement object finder using CLIP + webcam
+2. **VQA System**: Use BLIP-2 to answer 5 questions about a scene
+3. **3D Localization**: Convert 2D detections to 3D points using depth camera
+4. **Integration**: Combine Whisper + GPT-4 Vision for end-to-end VLA
+5. **Benchmark**: Compare CLIP vs. GPT-4 Vision grounding accuracy
+
+## Further Reading
+
+- [CLIP Paper: "Learning Transferable Visual Models"](https://arxiv.org/abs/2103.00020)
+- [BLIP-2: "Bootstrapping Language-Image Pre-training"](https://arxiv.org/abs/2301.12597)
+- [GPT-4 Vision Documentation](https://platform.openai.com/docs/guides/vision)
+- [GroundingDINO: Open-Set Detection](https://github.com/IDEA-Research/GroundingDINO)

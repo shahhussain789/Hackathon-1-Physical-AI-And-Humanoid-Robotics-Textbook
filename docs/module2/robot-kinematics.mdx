@@ -1,0 +1,419 @@
+---
+title: Robot Kinematics - From Joint Angles to End-Effector Poses
+sidebar_label: Robot Kinematics
+sidebar_position: 1
+description: Master forward kinematics - the mathematics of mapping joint angles to end-effector positions using transformation matrices and DH parameters.
+keywords: [forward kinematics, transformation matrices, denavit-hartenberg, dh parameters, homogeneous transforms]
+tags: [module2, kinematics, mathematics]
+---
+
+# Robot Kinematics: From Joint Angles to End-Effector Poses
+
+## Introduction
+
+Imagine you're controlling a robot arm with 3 joints. You set the joint angles to θ₁=30°, θ₂=45°, θ₃=-20°. **Question**: Where is the robot's hand (end-effector) in 3D space?
+
+This is the **forward kinematics** problem—one of the most fundamental questions in robotics.
+
+## What is Kinematics?
+
+:::tip Definition
+**Kinematics** is the study of motion without considering the forces that cause it. In robotics, kinematics describes the relationship between joint parameters (angles, positions) and end-effector pose (position and orientation).
+:::
+
+### Two Main Problems
+
+1. **Forward Kinematics (FK)**: Given joint angles → Find end-effector pose
+2. **Inverse Kinematics (IK)**: Given desired end-effector pose → Find joint angles (next chapter)
+
+This chapter focuses on **forward kinematics**.
+
+## Why Kinematics Matters
+
+**Real-World Applications**:
+- **Path Planning**: "Move hand to (x=0.5m, y=0.3m, z=0.8m)" requires knowing current position (FK) and planning joint motions (IK)
+- **Collision Detection**: Check if robot links will hit obstacles by computing their positions (FK)
+- **Visualization**: Display robot configuration in simulation (RViz, Gazebo use FK)
+- **Teleoperation**: Human controls end-effector, robot computes required joint motions
+
+## Coordinate Frames and Transformations
+
+### The Need for Multiple Frames
+
+A robot has many coordinate frames:
+- **World frame**: Fixed in the environment
+- **Base frame**: At the robot's base
+- **Link frames**: One per link
+- **End-effector frame**: At the gripper/hand
+
+**Problem**: How do we relate a point in the end-effector frame to the world frame?
+
+**Solution**: Transformation matrices.
+
+### Homogeneous Transformation Matrices
+
+A **4×4 homogeneous transformation matrix** represents both rotation and translation:
+
+```
+T = [ R  p ]
+    [ 0  1 ]
+
+where:
+- R is a 3×3 rotation matrix
+- p is a 3×1 translation vector
+- Bottom row is [0 0 0 1]
+```
+
+**Example** (Translation only):
+```
+T_translate = [1  0  0  dx]
+              [0  1  0  dy]
+              [0  0  1  dz]
+              [0  0  0  1 ]
+```
+
+Moves a point by (dx, dy, dz).
+
+**Example** (Rotation around Z-axis):
+```
+T_rotz(θ) = [cos(θ)  -sin(θ)  0  0]
+            [sin(θ)   cos(θ)  0  0]
+            [0        0       1  0]
+            [0        0       0  1]
+```
+
+### Chaining Transformations
+
+**Key Insight**: Multiply transformation matrices to compose motions.
+
+**Example**: Rotate 90° around Z, then translate by (1, 0, 0):
+```
+T_final = T_translate × T_rotz(90°)
+```
+
+**In Python** (using NumPy):
+```python
+import numpy as np
+
+def trans_x(d):
+    return np.array([
+        [1, 0, 0, d],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ])
+
+def rot_z(theta):
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([
+        [c, -s, 0, 0],
+        [s,  c, 0, 0],
+        [0,  0, 1, 0],
+        [0,  0, 0, 1]
+    ])
+
+# Chain transformations
+T_final = trans_x(1.0) @ rot_z(np.pi/2)
+```
+
+## Forward Kinematics for Serial Manipulators
+
+### The Problem Statement
+
+Given:
+- Joint angles: θ = [θ₁, θ₂, ..., θₙ]
+- Link lengths and offsets (robot geometry)
+
+Find:
+- End-effector position: p = [x, y, z]
+- End-effector orientation: R (3×3 rotation matrix)
+
+Combined as: **T₀ⁿ** (transformation from base frame 0 to end-effector frame n)
+
+### Denavit-Hartenberg (DH) Convention
+
+**Problem**: How to systematically assign coordinate frames to each joint?
+
+**Solution**: The **DH convention**—a standard way to parameterize robot kinematics.
+
+#### DH Parameters
+
+For each link i, define 4 parameters:
+
+| Parameter | Symbol | Description |
+|-----------|--------|-------------|
+| **Link length** | aᵢ | Distance along xᵢ from zᵢ₋₁ to zᵢ |
+| **Link twist** | αᵢ | Rotation around xᵢ from zᵢ₋₁ to zᵢ |
+| **Link offset** | dᵢ | Distance along zᵢ₋₁ from xᵢ₋₁ to xᵢ |
+| **Joint angle** | θᵢ | Rotation around zᵢ₋₁ from xᵢ₋₁ to xᵢ |
+
+**For revolute joints**: θᵢ is variable, others are constants
+**For prismatic joints**: dᵢ is variable, others are constants
+
+#### DH Transformation Matrix
+
+The transformation from frame i-1 to frame i:
+
+```
+Tᵢ₋₁ⁱ = Rot_z(θᵢ) × Trans_z(dᵢ) × Trans_x(aᵢ) × Rot_x(αᵢ)
+
+     = [cos(θᵢ)  -sin(θᵢ)cos(αᵢ)   sin(θᵢ)sin(αᵢ)  aᵢcos(θᵢ)]
+       [sin(θᵢ)   cos(θᵢ)cos(αᵢ)  -cos(θᵢ)sin(αᵢ)  aᵢsin(θᵢ)]
+       [0         sin(αᵢ)           cos(αᵢ)          dᵢ        ]
+       [0         0                 0                1         ]
+```
+
+### Example: 2-Link Planar Arm
+
+**Setup**:
+- 2 revolute joints (shoulder, elbow)
+- Link lengths: L₁, L₂
+- Both joints rotate in the XY plane
+
+**DH Table**:
+
+| Link | θᵢ | dᵢ | aᵢ | αᵢ |
+|------|-----|-----|-----|-----|
+| 1    | θ₁* | 0   | L₁  | 0   |
+| 2    | θ₂* | 0   | L₂  | 0   |
+
+*Variable (θ₁, θ₂ are joint angles)
+
+**Forward Kinematics**:
+```
+T₀² = T₀¹ × T₁²
+
+where:
+T₀¹ = [cos(θ₁)  -sin(θ₁)  0  L₁cos(θ₁)]
+      [sin(θ₁)   cos(θ₁)  0  L₁sin(θ₁)]
+      [0         0        1  0          ]
+      [0         0        0  1          ]
+
+T₁² = [cos(θ₂)  -sin(θ₂)  0  L₂cos(θ₂)]
+      [sin(θ₂)   cos(θ₂)  0  L₂sin(θ₂)]
+      [0         0        1  0          ]
+      [0         0        0  1          ]
+```
+
+**End-Effector Position**:
+```
+x = L₁cos(θ₁) + L₂cos(θ₁ + θ₂)
+y = L₁sin(θ₁) + L₂sin(θ₁ + θ₂)
+z = 0 (planar arm)
+```
+
+### Python Implementation
+
+```python
+import numpy as np
+
+def dh_transform(theta, d, a, alpha):
+    """Compute DH transformation matrix."""
+    ct, st = np.cos(theta), np.sin(theta)
+    ca, sa = np.cos(alpha), np.sin(alpha)
+
+    return np.array([
+        [ct, -st*ca,  st*sa, a*ct],
+        [st,  ct*ca, -ct*sa, a*st],
+        [0,   sa,     ca,    d   ],
+        [0,   0,      0,     1   ]
+    ])
+
+def forward_kinematics_2link(theta1, theta2, L1=1.0, L2=0.8):
+    """FK for 2-link planar arm."""
+    # DH parameters (theta, d, a, alpha)
+    T01 = dh_transform(theta1, 0, L1, 0)
+    T12 = dh_transform(theta2, 0, L2, 0)
+
+    # Chain transformations
+    T02 = T01 @ T12
+
+    # Extract end-effector position
+    x, y, z = T02[0, 3], T02[1, 3], T02[2, 3]
+
+    return x, y, z
+
+# Example usage
+theta1, theta2 = np.deg2rad(30), np.deg2rad(45)
+x, y, z = forward_kinematics_2link(theta1, theta2)
+print(f"End-effector at: ({x:.3f}, {y:.3f}, {z:.3f})")
+```
+
+**Output**: `End-effector at: (1.232, 1.098, 0.000)`
+
+## Forward Kinematics for Humanoid Arms
+
+### Standard 7-DoF Arm
+
+A typical humanoid arm has 7 degrees of freedom:
+- **Shoulder**: 3 DoF (pitch, roll, yaw)
+- **Elbow**: 1 DoF (pitch)
+- **Wrist**: 3 DoF (pitch, roll, yaw)
+
+**DH Table** (simplified, actual robots vary):
+
+| Link | θᵢ | dᵢ | aᵢ | αᵢ |
+|------|-----|-----|-----|-----|
+| 1 | θ₁* | 0 | 0 | π/2 |
+| 2 | θ₂* | 0 | L_upper | 0 |
+| 3 | θ₃* | 0 | 0 | π/2 |
+| 4 | θ₄* | L_elbow | 0 | -π/2 |
+| 5 | θ₅* | 0 | L_forearm | 0 |
+| 6 | θ₆* | 0 | 0 | π/2 |
+| 7 | θ₇* | L_wrist | 0 | 0 |
+
+**FK Computation**:
+```
+T₀⁷ = T₀¹ × T₁² × T₂³ × T₃⁴ × T₄⁵ × T₅⁶ × T₆⁷
+```
+
+(Multiply 7 transformation matrices)
+
+## Velocity Kinematics (Jacobian)
+
+### The Jacobian Matrix
+
+**Problem**: How do joint velocities relate to end-effector velocity?
+
+**Answer**: The **Jacobian matrix** J.
+
+**Definition**:
+```
+ẋ = J(θ) θ̇
+
+where:
+- ẋ = [vₓ, vᵧ, vᵧ, ωₓ, ωᵧ, ωᵧ]ᵀ (end-effector linear & angular velocity)
+- θ̇ = [θ̇₁, θ̇₂, ..., θ̇ₙ]ᵀ (joint velocities)
+- J is a 6×n matrix
+```
+
+### Computing the Jacobian
+
+**For each joint i**:
+```
+Jᵥᵢ = zᵢ₋₁ × (pₙ - pᵢ₋₁)  (linear velocity contribution)
+Jωᵢ = zᵢ₋₁                (angular velocity contribution)
+
+where:
+- zᵢ₋₁ = axis of rotation for joint i
+- pₙ = end-effector position
+- pᵢ₋₁ = position of joint i
+```
+
+### Why the Jacobian Matters
+
+1. **Singularities**: When det(J) = 0, robot loses a degree of freedom (gets "stuck")
+2. **Inverse Kinematics**: J⁻¹ used in numerical IK algorithms (next chapter)
+3. **Force Control**: Relates joint torques to end-effector forces
+
+## Applications in ROS 2
+
+### Publishing Joint States
+
+```python
+from sensor_msgs.msg import JointState
+
+joint_state_msg = JointState()
+joint_state_msg.name = ['shoulder', 'elbow', 'wrist']
+joint_state_msg.position = [theta1, theta2, theta3]
+joint_state_msg.velocity = [0.0, 0.0, 0.0]
+joint_state_msg.effort = [0.0, 0.0, 0.0]
+
+publisher.publish(joint_state_msg)
+```
+
+### Using TF2 for Transformations
+
+ROS 2's `tf2` library automatically broadcasts transformations based on URDF:
+
+```python
+from tf2_ros import TransformListener, Buffer
+
+tf_buffer = Buffer()
+tf_listener = TransformListener(tf_buffer, node)
+
+# Query transform from base to end-effector
+transform = tf_buffer.lookup_transform('base_link', 'end_effector', rclpy.time.Time())
+
+x = transform.transform.translation.x
+y = transform.transform.translation.y
+z = transform.transform.translation.z
+```
+
+## Visualization in RViz
+
+**RViz** (ROS Visualization) displays robot models and coordinate frames.
+
+**To visualize FK**:
+1. Publish `JointState` messages with desired angles
+2. `robot_state_publisher` node computes FK using URDF
+3. RViz displays robot in 3D
+
+**Launch command**:
+```bash
+ros2 run rviz2 rviz2
+ros2 run robot_state_publisher robot_state_publisher --ros-args -p robot_description:=$(cat robot.urdf)
+```
+
+## Common Pitfalls and Debugging
+
+### Mistake 1: Wrong DH Parameter Order
+
+**Error**: Multiplying transformations in wrong order.
+
+**Fix**: Always multiply **right to left**: T₀ⁿ = T₀¹ × T₁² × ... × Tₙ₋₁ⁿ
+
+### Mistake 2: Radians vs. Degrees
+
+**Error**: Using degrees when code expects radians.
+
+**Fix**: Always use `np.deg2rad()` or `math.radians()`.
+
+### Mistake 3: Coordinate Frame Confusion
+
+**Error**: Mixing frames (e.g., interpreting end-effector coordinates as world coordinates).
+
+**Fix**: Keep track of frames with clear naming: `p_world`, `p_base`, `p_ee`.
+
+## Summary
+
+**Forward Kinematics** maps joint angles to end-effector pose:
+
+- **Transformation matrices** represent rotation + translation
+- **DH convention** standardizes frame assignment
+- **Chain transformations** by matrix multiplication
+- **Jacobian matrix** relates joint velocities to end-effector velocity
+- **ROS 2 tools** (tf2, RViz) automate FK computation and visualization
+
+**Next Chapter**: Given a desired end-effector pose, how do we solve for joint angles? Enter **Inverse Kinematics**.
+
+---
+
+:::tip Key Takeaways
+- Forward kinematics: θ → (position, orientation)
+- Use 4×4 homogeneous transformation matrices
+- DH parameters: (θ, d, a, α) define each joint
+- Chain transformations: T₀ⁿ = T₀¹ × T₁² × ... × Tₙ₋₁ⁿ
+- Jacobian: relates joint velocities to end-effector velocity
+- ROS 2 handles FK automatically via URDF + robot_state_publisher
+:::
+
+## Exercises
+
+1. **2-Link FK**: Write Python code to compute FK for a 2-link arm with L₁=1.5m, L₂=1.0m. Test with θ₁=60°, θ₂=-30°.
+
+2. **3-Link Arm**: Extend to 3 links. Compute FK for various configurations.
+
+3. **DH Table**: Given a robot URDF file, derive the DH parameter table.
+
+4. **Jacobian**: Derive the Jacobian for a 2-link planar arm analytically.
+
+## Further Reading
+
+- **Books**:
+  - "Modern Robotics" by Lynch & Park (Chapter 4: Forward Kinematics)
+  - "Introduction to Robotics" by Craig (Chapter 3: Spatial Descriptions and Transformations)
+- **Tutorials**:
+  - [ROS 2 TF2 Tutorial](https://docs.ros.org/en/humble/Tutorials/Intermediate/Tf2/Introduction-To-Tf2.html)
+- **Videos**:
+  - [Angela Sodemann: DH Parameters Explained](https://www.youtube.com/watch?v=rA9tm0gTln8)

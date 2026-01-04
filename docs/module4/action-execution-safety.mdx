@@ -1,0 +1,647 @@
+---
+title: Action Execution & Safety for VLA Systems
+sidebar_label: Action Execution & Safety
+sidebar_position: 6
+description: Build reliable and safe action execution systems for LLM-controlled robots with guardrails, verification, and human-in-the-loop oversight.
+keywords: [robot safety, action execution, safety guardrails, verification, human-in-the-loop, fail-safe, llm safety]
+tags: [module4, safety, execution, reliability]
+---
+
+# Action Execution & Safety for VLA Systems
+
+## Introduction
+
+**The Safety Challenge**:
+```
+LLM: "Move arm at 10 m/s to grasp object"
+```
+
+**Problem**: That's dangerously fast! Could damage robot or injure humans.
+
+**This chapter ensures VLA systems are**:
+- **Safe**: Never harm humans or environment
+- **Reliable**: Handle failures gracefully
+- **Verifiable**: Confirm actions succeeded
+- **Transparent**: Humans can understand and override
+
+## The Safety Stack
+
+### Layers of Protection
+
+```
+┌─────────────────────────────────────────┐
+│   Layer 5: Emergency Stop (Hardware)   │  ← Physical button
+├─────────────────────────────────────────┤
+│   Layer 4: Workspace Limits            │  ← Joint/velocity limits
+├─────────────────────────────────────────┤
+│   Layer 3: Action Validation           │  ← Check before execution
+├─────────────────────────────────────────┤
+│   Layer 2: LLM Output Filtering        │  ← Parse and verify LLM
+├─────────────────────────────────────────┤
+│   Layer 1: Prompt Engineering          │  ← Constrain LLM output
+└─────────────────────────────────────────┘
+```
+
+**Defense in Depth**: Multiple layers prevent failures.
+
+## Layer 1: Prompt Engineering for Safety
+
+### Safety-Aware System Prompt
+
+```python
+SAFETY_SYSTEM_PROMPT = """
+You are an AI planner for a humanoid robot. SAFETY IS CRITICAL.
+
+**Safety Rules (NEVER VIOLATE)**:
+1. Maximum velocity: 0.5 m/s
+2. Maximum gripper force: 10 N
+3. Forbidden zones: [stairs, outside, near_humans]
+4. Always check surroundings before moving
+5. If uncertain, ask for human confirmation
+
+**Available Actions:**
+- navigate_to(location, max_speed=0.3)  # Default safe speed
+- grasp_object(object_id, force=5.0)     # Default gentle grasp
+- release_object()
+- say(text)  # Inform user
+- request_human_approval(action)  # When uncertain
+
+**Output Format:** JSON array of actions
+
+**If user requests unsafe action, respond with:**
+{
+  "error": "Safety violation",
+  "reason": "Explanation of why it's unsafe",
+  "alternative": "Safe alternative action"
+}
+"""
+```
+
+**Example**:
+```
+User: "Move as fast as possible to the kitchen"
+
+LLM Response:
+{
+  "error": "Safety violation",
+  "reason": "Maximum safe speed is 0.5 m/s",
+  "alternative": [
+    {"action": "navigate_to", "params": {"location": "kitchen", "max_speed": 0.5}}
+  ]
+}
+```
+
+## Layer 2: LLM Output Validation
+
+### Parsing and Sanitization
+
+```python
+import json
+from typing import List, Dict, Optional
+
+class SafeLLMParser:
+    """Parse and validate LLM responses."""
+
+    ALLOWED_ACTIONS = [
+        "navigate_to",
+        "grasp_object",
+        "release_object",
+        "say",
+        "request_human_approval"
+    ]
+
+    def parse_llm_response(self, llm_output: str) -> Optional[List[Dict]]:
+        """Parse LLM output with safety checks."""
+
+        try:
+            # Extract JSON (handle markdown code blocks)
+            plan = self.extract_json(llm_output)
+
+            # Validate structure
+            if not isinstance(plan, list):
+                raise ValueError("Plan must be a list of actions")
+
+            # Validate each action
+            validated_plan = []
+            for step in plan:
+                if self.validate_action(step):
+                    validated_plan.append(step)
+                else:
+                    print(f"Rejected unsafe action: {step}")
+
+            return validated_plan if validated_plan else None
+
+        except Exception as e:
+            print(f"Failed to parse LLM output: {e}")
+            return None
+
+    def extract_json(self, text: str) -> List[Dict]:
+        """Extract JSON from potentially markdown-wrapped text."""
+        # Try direct parsing
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Try extracting from markdown code block
+        import re
+        match = re.search(r'```json\n(.*?)\n```', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+
+        raise ValueError("No valid JSON found in LLM output")
+
+    def validate_action(self, action: Dict) -> bool:
+        """Validate single action against safety rules."""
+
+        # Check action name
+        if action.get("action") not in self.ALLOWED_ACTIONS:
+            print(f"Unknown action: {action.get('action')}")
+            return False
+
+        # Action-specific validation
+        action_name = action["action"]
+        params = action.get("params", {})
+
+        if action_name == "navigate_to":
+            return self.validate_navigation(params)
+        elif action_name == "grasp_object":
+            return self.validate_grasp(params)
+
+        return True
+
+    def validate_navigation(self, params: Dict) -> bool:
+        """Validate navigation parameters."""
+        FORBIDDEN_LOCATIONS = ["outside", "stairs", "roof"]
+        MAX_SPEED = 0.5
+
+        location = params.get("location", "")
+        if location.lower() in FORBIDDEN_LOCATIONS:
+            print(f"Forbidden location: {location}")
+            return False
+
+        speed = params.get("max_speed", 0.3)
+        if speed > MAX_SPEED:
+            print(f"Speed {speed} exceeds max {MAX_SPEED}")
+            params["max_speed"] = MAX_SPEED  # Clamp to safe value
+
+        return True
+
+    def validate_grasp(self, params: Dict) -> bool:
+        """Validate grasp parameters."""
+        MAX_FORCE = 10.0
+
+        force = params.get("force", 5.0)
+        if force > MAX_FORCE:
+            print(f"Force {force} exceeds max {MAX_FORCE}")
+            params["force"] = MAX_FORCE
+
+        return True
+
+
+# Usage
+parser = SafeLLMParser()
+plan = parser.parse_llm_response(llm_output)
+if plan:
+    execute_plan(plan)
+else:
+    print("Invalid or unsafe plan rejected")
+```
+
+## Layer 3: Pre-Execution Checks
+
+### Affordance Verification
+
+**Check if action is feasible before executing**:
+
+```python
+class AffordanceChecker:
+    """Verify actions are physically possible."""
+
+    def __init__(self, robot_state):
+        self.robot_state = robot_state
+
+    def check_navigate_to(self, location: str) -> bool:
+        """Check if location is reachable."""
+        # Query Nav2 costmap
+        costmap = self.robot_state.get_costmap()
+        target_pose = self.robot_state.get_location_pose(location)
+
+        if target_pose is None:
+            print(f"Unknown location: {location}")
+            return False
+
+        # Check if path exists (simple heuristic)
+        if costmap.is_occupied(target_pose):
+            print(f"Location {location} is blocked")
+            return False
+
+        return True
+
+    def check_grasp_object(self, object_id: int) -> bool:
+        """Check if object is within reach."""
+        object_pose = self.robot_state.get_object_pose(object_id)
+
+        if object_pose is None:
+            print(f"Object {object_id} not found")
+            return False
+
+        # Check workspace bounds
+        gripper_pose = self.robot_state.get_gripper_pose()
+        distance = np.linalg.norm(object_pose[:3] - gripper_pose[:3])
+
+        MAX_REACH = 0.8  # meters
+        if distance > MAX_REACH:
+            print(f"Object {object_id} out of reach ({distance:.2f}m > {MAX_REACH}m)")
+            return False
+
+        return True
+
+    def verify_action(self, action: Dict) -> bool:
+        """Verify action is feasible."""
+        action_name = action["action"]
+        params = action["params"]
+
+        if action_name == "navigate_to":
+            return self.check_navigate_to(params["location"])
+        elif action_name == "grasp_object":
+            return self.check_grasp_object(params.get("object_id"))
+
+        return True  # Unknown actions assumed safe
+```
+
+### Collision Checking
+
+**Use MoveIt 2 for motion validation**:
+
+```python
+from moveit_msgs.srv import GetPositionIK
+from moveit_msgs.msg import PositionIKRequest
+
+def check_ik_feasible(target_pose):
+    """Check if IK solution exists and is collision-free."""
+
+    # Create IK request
+    ik_request = PositionIKRequest()
+    ik_request.group_name = "arm"
+    ik_request.pose_stamped = target_pose
+    ik_request.avoid_collisions = True
+
+    # Call IK service
+    response = ik_service.call(ik_request)
+
+    if response.error_code.val != 1:  # SUCCESS
+        print(f"IK failed: {response.error_code}")
+        return False
+
+    return True
+```
+
+## Layer 4: Runtime Safety Monitors
+
+### Velocity and Force Monitoring
+
+```python
+import rclpy
+from sensor_msgs.msg import JointState
+
+class SafetyMonitor(Node):
+    """Real-time safety monitoring during execution."""
+
+    def __init__(self):
+        super().__init__('safety_monitor')
+
+        # Joint state subscriber
+        self.joint_sub = self.create_subscription(
+            JointState, '/joint_states', self.joint_callback, 10
+        )
+
+        # Safety limits
+        self.MAX_JOINT_VELOCITY = 2.0  # rad/s
+        self.MAX_JOINT_EFFORT = 50.0   # Nm
+
+        # E-stop publisher
+        self.estop_pub = self.create_publisher(Bool, '/emergency_stop', 10)
+
+    def joint_callback(self, msg):
+        """Check joint velocities and efforts."""
+
+        for i, name in enumerate(msg.name):
+            # Check velocity
+            if abs(msg.velocity[i]) > self.MAX_JOINT_VELOCITY:
+                self.trigger_estop(f"Joint {name} velocity too high: {msg.velocity[i]}")
+                return
+
+            # Check effort (torque)
+            if abs(msg.effort[i]) > self.MAX_JOINT_EFFORT:
+                self.trigger_estop(f"Joint {name} effort too high: {msg.effort[i]}")
+                return
+
+    def trigger_estop(self, reason):
+        """Emergency stop."""
+        self.get_logger().error(f"EMERGENCY STOP: {reason}")
+
+        # Publish e-stop signal
+        self.estop_pub.publish(Bool(data=True))
+
+        # In real system: Cut power to motors, apply brakes
+```
+
+### Proximity Detection
+
+**Stop if human detected nearby**:
+
+```python
+from sensor_msgs.msg import LaserScan
+
+class ProximityMonitor(Node):
+    """Stop robot if obstacles detected."""
+
+    def __init__(self):
+        super().__init__('proximity_monitor')
+
+        self.scan_sub = self.create_subscription(
+            LaserScan, '/scan', self.scan_callback, 10
+        )
+
+        self.MIN_SAFE_DISTANCE = 0.5  # meters
+        self.estop_pub = self.create_publisher(Bool, '/emergency_stop', 10)
+
+    def scan_callback(self, msg):
+        """Check for nearby obstacles."""
+
+        min_distance = min(msg.ranges)
+
+        if min_distance < self.MIN_SAFE_DISTANCE:
+            self.get_logger().warn(f"Obstacle at {min_distance:.2f}m! Stopping.")
+            self.estop_pub.publish(Bool(data=True))
+```
+
+## Layer 5: Human-in-the-Loop
+
+### Approval System
+
+**Request human confirmation for critical actions**:
+
+```python
+from rclpy.action import ActionServer
+from std_srvs.srv import Trigger
+
+class HumanApprovalServer:
+    """Request human approval before executing actions."""
+
+    def __init__(self):
+        self.pending_action = None
+
+        # Service for GUI to approve/reject
+        self.approve_srv = self.create_service(
+            Trigger, 'approve_action', self.approve_callback
+        )
+
+    def request_approval(self, action: Dict) -> bool:
+        """Wait for human approval."""
+
+        self.pending_action = action
+        self.get_logger().info(f"Requesting approval for: {action}")
+
+        # Display to operator (GUI, speech, etc.)
+        self.display_action(action)
+
+        # Wait for response (blocking)
+        response = self.wait_for_approval(timeout=30.0)
+
+        return response
+
+    def display_action(self, action):
+        """Show action to human operator."""
+        # In production: Show in GUI, speak aloud, etc.
+        print(f"\n{'='*50}")
+        print(f"ACTION REQUIRES APPROVAL:")
+        print(f"  Action: {action['action']}")
+        print(f"  Params: {action['params']}")
+        print(f"Approve? (Press Enter or call /approve_action)")
+        print(f"{'='*50}\n")
+
+    def approve_callback(self, request, response):
+        """Human approved action."""
+        response.success = True
+        response.message = "Action approved"
+        self.approved = True
+        return response
+
+
+# Usage in action executor
+approval_server = HumanApprovalServer()
+
+def execute_action_safely(action):
+    """Execute with optional human approval."""
+
+    # Critical actions require approval
+    CRITICAL_ACTIONS = ["grasp_object", "navigate_to_outside"]
+
+    if action["action"] in CRITICAL_ACTIONS:
+        approved = approval_server.request_approval(action)
+        if not approved:
+            print("Action rejected by human")
+            return False
+
+    # Execute
+    return execute_action(action)
+```
+
+## Action Verification
+
+### Post-Execution Checks
+
+**Verify actions succeeded**:
+
+```python
+class ActionVerifier:
+    """Verify actions completed successfully."""
+
+    def verify_navigation(self, target_location: str) -> bool:
+        """Check if robot reached target."""
+
+        current_pose = self.robot_state.get_current_pose()
+        target_pose = self.robot_state.get_location_pose(target_location)
+
+        distance = np.linalg.norm(current_pose[:2] - target_pose[:2])
+
+        POSITION_TOLERANCE = 0.1  # meters
+        if distance < POSITION_TOLERANCE:
+            print(f"Navigation successful (error: {distance:.2f}m)")
+            return True
+        else:
+            print(f"Navigation failed (error: {distance:.2f}m)")
+            return False
+
+    def verify_grasp(self) -> bool:
+        """Check if object was grasped."""
+
+        # Check gripper position (closed?)
+        gripper_position = self.robot_state.get_gripper_position()
+
+        # Check force sensor (object detected?)
+        gripper_force = self.robot_state.get_gripper_force()
+
+        MIN_CLOSED_POSITION = 0.01  # Almost closed
+        MIN_FORCE = 1.0  # Newtons
+
+        if gripper_position < MIN_CLOSED_POSITION and gripper_force > MIN_FORCE:
+            print("Grasp successful")
+            return True
+        else:
+            print(f"Grasp failed (pos: {gripper_position}, force: {gripper_force})")
+            return False
+```
+
+## Error Handling and Recovery
+
+### Graceful Failure Management
+
+```python
+class RobustActionExecutor:
+    """Execute actions with error handling."""
+
+    def execute_plan_robust(self, plan, max_retries=3):
+        """Execute plan with automatic recovery."""
+
+        for i, action in enumerate(plan):
+            success = False
+
+            for attempt in range(max_retries):
+                # Pre-check
+                if not self.verify_action_safe(action):
+                    self.get_logger().error(f"Action {action} is unsafe")
+                    break
+
+                # Execute
+                self.get_logger().info(f"Executing step {i+1}/{len(plan)}: {action}")
+                result = self.execute_action(action)
+
+                # Verify
+                verified = self.verify_action_result(action, result)
+
+                if verified:
+                    success = True
+                    break
+                else:
+                    self.get_logger().warn(f"Attempt {attempt+1} failed, retrying...")
+
+            if not success:
+                # Recovery strategy
+                recovery_success = self.attempt_recovery(action, plan[i+1:])
+
+                if not recovery_success:
+                    self.get_logger().error("Recovery failed, aborting plan")
+                    return False
+
+        return True
+
+    def attempt_recovery(self, failed_action, remaining_plan):
+        """Try to recover from failure."""
+
+        # Strategy 1: Ask LLM to replan
+        context = {
+            "failed_action": failed_action,
+            "remaining_goal": remaining_plan
+        }
+        new_plan = self.llm_replan(context)
+
+        if new_plan:
+            return self.execute_plan_robust(new_plan)
+
+        # Strategy 2: Manual recovery actions
+        if failed_action["action"] == "grasp_object":
+            # Reset gripper and retry
+            self.execute_action({"action": "release_object", "params": {}})
+            return True
+
+        return False
+```
+
+## Simulation Testing (Sim-to-Real Safety)
+
+### Test in Isaac Sim First
+
+**Always validate in simulation before real robot**:
+
+```python
+class SafetyTester:
+    """Test LLM plans in simulation before deployment."""
+
+    def __init__(self, isaac_sim_connection):
+        self.sim = isaac_sim_connection
+
+    def test_plan_safety(self, plan):
+        """Run plan in simulation, check for collisions/failures."""
+
+        # Reset simulation
+        self.sim.reset()
+
+        # Execute plan
+        for action in plan:
+            result = self.sim.execute_action(action)
+
+            if result["collision"]:
+                return False, f"Collision detected at action: {action}"
+
+            if result["out_of_bounds"]:
+                return False, f"Out of workspace bounds: {action}"
+
+        return True, "Plan executed safely in simulation"
+
+
+# Usage
+safety_tester = SafetyTester(isaac_sim)
+
+plan = llm_planner.plan_task("Bring me the cup")
+safe, message = safety_tester.test_plan_safety(plan)
+
+if safe:
+    print("Plan validated in sim, deploying to real robot")
+    real_robot.execute_plan(plan)
+else:
+    print(f"Plan failed simulation: {message}")
+```
+
+## Summary
+
+Safe VLA systems require:
+- **Multi-layer defense**: Prompts → validation → checks → monitors → E-stop
+- **Pre-execution**: Verify actions before running
+- **Runtime monitoring**: Watch velocities, forces, proximity
+- **Human oversight**: Critical actions need approval
+- **Verification**: Confirm success after execution
+- **Graceful failures**: Retry, recover, or abort safely
+- **Sim testing**: Validate in Isaac Sim before real deployment
+
+**Safety is non-negotiable in robotics!**
+
+---
+
+:::tip Key Takeaways
+- **Defense in Depth**: Multiple safety layers (5+)
+- **Prompt Engineering**: Constrain LLM to safe outputs
+- **Validation**: Parse and verify LLM responses
+- **Affordance Checks**: Verify actions are feasible
+- **Runtime Monitors**: Watch velocities, forces, collisions
+- **Human-in-the-Loop**: Approval for critical actions
+- **Verification**: Confirm actions succeeded
+- **Sim-to-Real**: Test safety in simulation first
+:::
+
+## Exercises
+
+1. **Safety Prompt**: Write system prompt with 10 safety rules
+2. **Validator**: Implement action validator for navigation + grasping
+3. **Monitor**: Create real-time safety monitor for joint limits
+4. **Approval System**: Build simple GUI for human approval
+5. **Sim Test**: Validate 5 LLM plans in Gazebo before execution
+
+## Further Reading
+
+- [ROS 2 Safety Standards](https://design.ros2.org/articles/safety_critical_systems.html)
+- [ISO 13482: Safety for Personal Care Robots](https://www.iso.org/standard/53820.html)
+- [MoveIt 2 Collision Checking](https://moveit.picknik.ai/main/doc/examples/collision_checking/collision_checking_tutorial.html)
+- [LLM Safety Best Practices](https://arxiv.org/abs/2310.10436)

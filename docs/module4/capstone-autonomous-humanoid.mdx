@@ -1,0 +1,685 @@
+---
+title: Capstone Project - The Autonomous Humanoid
+sidebar_label: Capstone: Autonomous Humanoid
+sidebar_position: 7
+description: Build a complete autonomous humanoid system integrating voice commands, cognitive planning, vision, navigation, and manipulation for real-world tasks.
+keywords: [capstone project, autonomous humanoid, vla integration, end-to-end robotics, final project]
+tags: [module4, capstone, project, integration]
+---
+
+# Capstone Project: The Autonomous Humanoid
+
+## Introduction
+
+**This is it—the culmination of all four modules!**
+
+You'll build a fully autonomous humanoid that:
+1. **Listens** to voice commands (Whisper)
+2. **Reasons** about tasks (LLM planning)
+3. **Sees** the world (computer vision)
+4. **Navigates** autonomously (Nav2 + VSLAM)
+5. **Manipulates** objects (MoveIt 2)
+
+**Scenario**: "Find the red cup on the table and bring it to me"
+
+Let's build it step by step.
+
+## Project Overview
+
+### System Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│            Autonomous Humanoid System                │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│  Voice Input (Whisper) ──────────┐                  │
+│                                   │                  │
+│  Camera Feed ───────────┐         ▼                  │
+│                         │    LLM Planner             │
+│  Depth Sensor ──────┐   │    (GPT-4 Vision)          │
+│                     │   │         │                  │
+│  VSLAM (cuVSLAM) ───┼───┘         │                  │
+│                     │             ▼                  │
+│  Object Detection ──┤       Action Executor          │
+│     (YOLO + CLIP)   │             │                  │
+│                     │      ┌──────┴──────┐           │
+│                     │      │             │           │
+│                     │      ▼             ▼           │
+│                     │   Nav2         MoveIt 2        │
+│                     │  (Navigate)   (Manipulate)     │
+│                     │      │             │           │
+│                     └──────┴─────────────┘           │
+│                            │                         │
+│                            ▼                         │
+│                      Humanoid Robot                  │
+│                   (Simulated or Real)                │
+└──────────────────────────────────────────────────────┘
+```
+
+### Modules Integration
+
+**This capstone combines:**
+- **Module 1**: Physical AI foundations
+- **Module 2**: Kinematics, dynamics, control
+- **Module 3**: VSLAM, Nav2, Isaac ROS
+- **Module 4**: Voice, LLM, vision-language grounding
+
+## Phase 1: Environment Setup
+
+### Hardware/Simulation Requirements
+
+**Simulated (Recommended for Learning)**:
+- Isaac Sim OR Gazebo + RViz
+- Humanoid model (NAO, Pepper, or custom)
+- Simulated RGB-D camera
+- GPU for Whisper + LLM inference
+
+**Real Robot (Advanced)**:
+- Humanoid platform (NAO, Pepper, TIAGo)
+- RGB-D camera (RealSense D435i)
+- Microphone (USB or array)
+- Jetson Orin or laptop + GPU
+
+### Workspace Setup
+
+```bash
+# Create ROS 2 workspace
+mkdir -p ~/capstone_ws/src
+cd ~/capstone_ws/src
+
+# Clone necessary packages (examples)
+git clone https://github.com/ros-planning/moveit2.git -b humble
+git clone https://github.com/ros-planning/navigation2.git -b humble
+
+# Build
+cd ~/capstone_ws
+colcon build
+
+# Source
+source install/setup.bash
+```
+
+### Isaac Sim Scene
+
+**Create tabletop scene** (`create_scene.py`):
+```python
+from omni.isaac.kit import SimulationApp
+simulation_app = SimulationApp({"headless": False})
+
+from omni.isaac.core import World
+from omni.isaac.core.objects import DynamicCuboid, VisualCuboid
+from omni.isaac.core.utils.stage import add_reference_to_stage
+import numpy as np
+
+# Create world
+world = World()
+world.scene.add_default_ground_plane()
+
+# Add table
+table = VisualCuboid(
+    prim_path="/World/Table",
+    position=np.array([1.0, 0.0, 0.4]),
+    size=np.array([0.8, 1.2, 0.8]),
+    color=np.array([0.6, 0.4, 0.2])
+)
+
+# Add objects on table
+red_cup = DynamicCuboid(
+    prim_path="/World/RedCup",
+    position=np.array([1.0, 0.2, 0.9]),
+    size=0.08,
+    color=np.array([1.0, 0.0, 0.0])  # Red
+)
+
+blue_cup = DynamicCuboid(
+    prim_path="/World/BlueCup",
+    position=np.array([1.0, -0.2, 0.9]),
+    size=0.08,
+    color=np.array([0.0, 0.0, 1.0])  # Blue
+)
+
+# Import humanoid robot (use URDF)
+from omni.isaac.urdf import _urdf
+urdf_interface = _urdf.acquire_urdf_interface()
+success = urdf_interface.parse_urdf(
+    urdf_path="/path/to/humanoid.urdf",
+    prim_path="/World/Humanoid",
+)
+
+# Add RGB-D camera to robot head
+# (Camera setup code from Module 3)
+
+world.reset()
+print("Scene ready! Press Play to start simulation.")
+
+while True:
+    world.step(render=True)
+```
+
+## Phase 2: Perception Pipeline
+
+### Object Detection + Grounding
+
+**`perception_node.py`**:
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from vision_msgs.msg import Detection2DArray
+from cv_bridge import CvBridge
+from ultralytics import YOLO
+import clip
+import torch
+from PIL import Image as PILImage
+
+class PerceptionNode(Node):
+    def __init__(self):
+        super().__init__('perception_node')
+
+        # Subscribers
+        self.bridge = CvBridge()
+        self.image_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.image_callback, 10
+        )
+        self.depth_sub = self.create_subscription(
+            Image, '/camera/depth/image_raw', self.depth_callback, 10
+        )
+
+        # Publishers
+        self.detection_pub = self.create_publisher(
+            Detection2DArray, '/detections', 10
+        )
+
+        # Models
+        self.yolo = YOLO('yolov8n.pt')
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", self.device)
+
+        self.latest_rgb = None
+        self.latest_depth = None
+
+        self.get_logger().info("Perception node ready")
+
+    def image_callback(self, msg):
+        self.latest_rgb = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        self.detect_objects()
+
+    def depth_callback(self, msg):
+        self.latest_depth = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+    def detect_objects(self):
+        """Run YOLO detection."""
+        if self.latest_rgb is None:
+            return
+
+        results = self.yolo(self.latest_rgb)
+        # Process and publish detections
+        # (Implementation details from Module 3)
+
+    def ground_object(self, description):
+        """Find object matching text description using CLIP."""
+        # (Implementation from Module 4 Chapter 4)
+        pass
+
+
+def main():
+    rclpy.init()
+    node = PerceptionNode()
+    rclpy.spin(node)
+```
+
+### VSLAM Localization
+
+**Launch Visual SLAM**:
+```bash
+ros2 launch isaac_ros_visual_slam isaac_ros_visual_slam.launch.py \
+  camera_topic:=/camera/image_raw \
+  camera_info_topic:=/camera/camera_info
+```
+
+**Provides**: `/visual_slam/tracking/odometry` for Nav2.
+
+## Phase 3: Complete VLA System
+
+### Main Controller Node
+
+**`autonomous_humanoid.py`**:
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from std_msgs.msg import String
+from nav2_msgs.action import NavigateToPose
+from moveit_msgs.action import MoveGroup
+import json
+
+class AutonomousHumanoid(Node):
+    """Complete VLA system integrating all modules."""
+
+    def __init__(self):
+        super().__init__('autonomous_humanoid')
+
+        # Voice input (from Whisper node)
+        self.voice_sub = self.create_subscription(
+            String, '/voice_commands', self.voice_callback, 10
+        )
+
+        # Action clients
+        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.moveit_client = ActionClient(self, MoveGroup, '/move_action')
+
+        # Modules
+        from llm_planner import GPT4VisionPlanner
+        from perception import VisionLanguageGrounder
+
+        self.planner = GPT4VisionPlanner()
+        self.grounder = VisionLanguageGrounder()
+
+        # State
+        self.current_plan = None
+        self.detected_objects = {}
+
+        self.get_logger().info("Autonomous Humanoid online!")
+
+    def voice_callback(self, msg):
+        """Process voice command."""
+        command = msg.data
+        self.get_logger().info(f"Voice command: {command}")
+
+        # Execute complete pipeline
+        self.execute_task(command)
+
+    def execute_task(self, command):
+        """Main VLA pipeline."""
+
+        # Step 1: Get current camera view
+        scene_image = self.capture_scene_image()
+
+        # Step 2: LLM planning (with vision context)
+        plan = self.planner.plan_from_image(command, scene_image)
+        self.get_logger().info(f"Plan: {json.dumps(plan, indent=2)}")
+
+        # Step 3: Execute plan
+        self.execute_plan(plan)
+
+    def execute_plan(self, plan):
+        """Execute action sequence."""
+
+        for i, action in enumerate(plan):
+            self.get_logger().info(f"Step {i+1}/{len(plan)}: {action}")
+
+            # Safety check
+            if not self.validate_action_safety(action):
+                self.get_logger().error("Unsafe action, aborting")
+                return
+
+            # Execute based on action type
+            action_type = action["action"]
+
+            if action_type == "navigate_to":
+                success = self.execute_navigation(action["params"])
+            elif action_type == "detect_object":
+                success = self.execute_detection(action["params"])
+            elif action_type == "grasp_object":
+                success = self.execute_grasp(action["params"])
+            elif action_type == "release_object":
+                success = self.execute_release()
+            elif action_type == "say":
+                success = self.execute_speech(action["params"])
+            else:
+                self.get_logger().warn(f"Unknown action: {action_type}")
+                success = False
+
+            # Verify success
+            if not success:
+                self.get_logger().error(f"Action failed: {action}")
+                # Attempt recovery
+                self.attempt_recovery(plan[i:])
+                return
+
+        self.get_logger().info("Task completed successfully!")
+
+    def execute_navigation(self, params):
+        """Navigate to location."""
+        location = params["location"]
+        self.get_logger().info(f"Navigating to {location}")
+
+        # Get coordinates (from map or predefined)
+        target_pose = self.get_location_pose(location)
+
+        # Send Nav2 goal
+        goal = NavigateToPose.Goal()
+        goal.pose = target_pose
+
+        future = self.nav_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, future)
+
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            return False
+
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future)
+
+        return True
+
+    def execute_detection(self, params):
+        """Detect and ground object."""
+        object_name = params["name"]
+        self.get_logger().info(f"Detecting: {object_name}")
+
+        # Capture current view
+        scene_image = self.capture_scene_image()
+
+        # Ground using CLIP
+        result, msg = self.grounder.ground_object(scene_image, object_name)
+
+        if result:
+            self.detected_objects[object_name] = result
+            self.get_logger().info(f"Found {object_name}: {msg}")
+            return True
+        else:
+            return False
+
+    def execute_grasp(self, params):
+        """Grasp detected object."""
+        object_id = params.get("object_id") or params.get("name")
+        self.get_logger().info(f"Grasping: {object_id}")
+
+        # Get 3D position from detection
+        if object_id not in self.detected_objects:
+            self.get_logger().error(f"Object {object_id} not detected")
+            return False
+
+        bbox = self.detected_objects[object_id]["bbox"]
+        depth_image = self.get_depth_image()
+        position_3d = self.bbox_to_3d(bbox, depth_image)
+
+        # Plan grasp with MoveIt 2
+        success = self.plan_and_execute_grasp(position_3d)
+        return success
+
+    def execute_release(self):
+        """Release grasped object."""
+        self.get_logger().info("Releasing object")
+        # Open gripper
+        # (MoveIt 2 gripper command)
+        return True
+
+    def execute_speech(self, params):
+        """Text-to-speech."""
+        text = params["text"]
+        self.get_logger().info(f"Speaking: {text}")
+        # Use TTS library
+        return True
+
+    def capture_scene_image(self):
+        """Get current camera image."""
+        # Subscribe to camera topic, return latest image
+        pass
+
+    def bbox_to_3d(self, bbox, depth_image):
+        """Convert 2D bbox to 3D position using depth."""
+        # (Implementation from Module 4 Chapter 4)
+        pass
+
+    def plan_and_execute_grasp(self, target_position):
+        """Use MoveIt 2 to plan and execute grasp."""
+        # (Implementation from Module 2)
+        pass
+
+
+def main():
+    rclpy.init()
+    node = AutonomousHumanoid()
+    rclpy.spin(node)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+## Phase 4: Testing & Validation
+
+### Test Scenarios
+
+**Test 1: Simple Fetch**
+```
+Command: "Bring me the red cup"
+Expected:
+1. Navigate to table
+2. Detect red cup (not blue cup!)
+3. Grasp cup
+4. Navigate to user
+5. Release cup
+```
+
+**Test 2: Object Selection**
+```
+Command: "Find the cup on the left side of the table"
+Expected:
+1. Navigate to table
+2. Detect all cups
+3. Select leftmost cup (spatial reasoning)
+4. Confirm with user
+```
+
+**Test 3: Multi-Step Task**
+```
+Command: "Clean the table by putting all objects in the box"
+Expected:
+1. Navigate to table
+2. Detect all objects
+3. For each object:
+   a. Grasp
+   b. Navigate to box
+   c. Release
+4. Confirm completion
+```
+
+### Evaluation Metrics
+
+| Metric | Target | Measurement |
+|--------|--------|-------------|
+| **Speech Recognition** | &gt;95% accuracy | Word Error Rate (WER) |
+| **Task Completion** | &gt;80% success | 10 trials per task |
+| **Navigation** | &lt;10cm error | Distance to goal |
+| **Object Detection** | &gt;90% precision | True positives |
+| **Grasp Success** | &gt;75% | Successful grasps / attempts |
+| **End-to-End Latency** | &lt;10 seconds | Command → action start |
+
+### Debug Checklist
+
+If something fails:
+
+- [ ] **Speech**: Check Whisper output, test with known phrases
+- [ ] **Planning**: Print LLM responses, verify JSON format
+- [ ] **Vision**: Visualize detections, check CLIP scores
+- [ ] **Navigation**: View Nav2 costmap, check VSLAM localization
+- [ ] **Manipulation**: Test MoveIt 2 IK, verify gripper control
+- [ ] **Safety**: Ensure all safety monitors active
+
+## Phase 5: Deployment
+
+### Launch File
+
+**`autonomous_humanoid.launch.py`**:
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        # Perception
+        Node(
+            package='my_robot',
+            executable='perception_node.py',
+            name='perception'
+        ),
+
+        # Voice
+        Node(
+            package='my_robot',
+            executable='whisper_node.py',
+            name='voice_recognition'
+        ),
+
+        # Main controller
+        Node(
+            package='my_robot',
+            executable='autonomous_humanoid.py',
+            name='vla_controller'
+        ),
+
+        # VSLAM (from Module 3)
+        # Nav2 (from Module 3)
+        # MoveIt 2 (from Module 2)
+    ])
+```
+
+**Run**:
+```bash
+ros2 launch my_robot autonomous_humanoid.launch.py
+```
+
+**Test**:
+```bash
+# Speak into microphone: "Bring me the red cup"
+# Watch robot execute!
+```
+
+## Demonstration Video
+
+**Record your robot**:
+```bash
+ros2 bag record -a -o capstone_demo
+
+# Later, replay:
+ros2 bag play capstone_demo
+```
+
+**Share**:
+- Show voice command input
+- Display LLM reasoning (print plan)
+- Visualize vision grounding (bbox overlays)
+- Record robot execution (third-person view)
+
+## Extensions & Improvements
+
+### Advanced Features
+
+1. **Multi-Robot Coordination**:
+   - Two humanoids collaborate on task
+   - LLM coordinates between robots
+
+2. **Continuous Learning**:
+   - Record failures
+   - Fine-tune LLM on successful executions
+
+3. **Emotion & Personality**:
+   - LLM generates friendly responses
+   - Text-to-speech with varied tones
+
+4. **Mobile Manipulation**:
+   - Navigate while holding object
+   - Dynamic obstacle avoidance
+
+5. **Tool Use**:
+   - "Use the broom to sweep the floor"
+   - LLM reasons about tool affordances
+
+## Summary
+
+**Congratulations!** You've built a complete autonomous humanoid:
+- ✅ Voice-controlled (Whisper)
+- ✅ Cognitively reasoning (GPT-4)
+- ✅ Visually grounded (CLIP, YOLO)
+- ✅ Autonomously navigating (Nav2 + VSLAM)
+- ✅ Manipulating objects (MoveIt 2)
+- ✅ Safe and reliable (multi-layer safety)
+
+**This is the state-of-the-art in robotics.**
+
+---
+
+:::tip Capstone Checklist
+**Phase 1: Setup**
+- [ ] Environment configured (Isaac Sim or Gazebo)
+- [ ] Humanoid robot model loaded
+- [ ] Camera and sensors working
+
+**Phase 2: Perception**
+- [ ] Object detection running (YOLO)
+- [ ] Vision-language grounding working (CLIP)
+- [ ] VSLAM providing localization
+
+**Phase 3: Integration**
+- [ ] Voice commands recognized (Whisper)
+- [ ] LLM planning generates valid actions
+- [ ] Actions execute on robot
+
+**Phase 4: Testing**
+- [ ] Simple fetch task succeeds
+- [ ] Object selection works (spatial reasoning)
+- [ ] Multi-step task completes
+
+**Phase 5: Deployment**
+- [ ] Launch file configured
+- [ ] Safety checks active
+- [ ] Demo video recorded
+:::
+
+## Submission (If Course Project)
+
+**Deliverables**:
+1. **Code Repository**: GitHub with README, launch files, dependencies
+2. **Demo Video**: 3-5 minutes showing:
+   - Voice command
+   - LLM reasoning (printed plan)
+   - Robot execution
+   - Success/failure cases
+3. **Report** (3-5 pages):
+   - System architecture diagram
+   - Challenges faced and solutions
+   - Evaluation metrics
+   - Future improvements
+4. **Presentation**: 10-minute walkthrough
+
+## Congratulations!
+
+You've completed the **Physical AI & Humanoid Robotics** curriculum.
+
+**You now have the skills to**:
+- Design and control humanoid robots
+- Integrate perception, planning, and action
+- Deploy LLM-powered intelligent systems
+- Build safe, autonomous physical AI
+
+**The future of robotics is in your hands. Go build amazing things!** 🤖🚀
+
+---
+
+## Further Reading
+
+- [RT-2 Robotics Transformer](https://robotics-transformer2.github.io/)
+- [Mobile ALOHA](https://mobile-aloha.github.io/)
+- [Open-X Embodiment](https://robotics-transformer-x.github.io/)
+- [Physical Intelligence Research](https://www.physicalintelligence.company/)
+
+## Community & Next Steps
+
+**Join the Community**:
+- [ROS Discourse](https://discourse.ros.org/)
+- [NVIDIA Isaac Forums](https://forums.developer.nvidia.com/c/agx-autonomous-machines/isaac/80)
+- [Humanoid Robotics Slack](https://humanoidrobotics.slack.com)
+
+**Continue Learning**:
+- Contribute to open-source robotics projects
+- Compete in RoboCup or other competitions
+- Pursue research in Physical AI
+- Build your own startup!
+
+**Thank you for completing this course!**

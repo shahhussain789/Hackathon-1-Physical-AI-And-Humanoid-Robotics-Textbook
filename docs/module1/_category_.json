@@ -1,0 +1,21 @@
+{
+  "label": "Module 1: Introduction to Physical AI",
+  "position": 2,
+  "collapsed": false,
+  "link": {
+    "type": "doc",
+    "id": "module1/index"
+  },
+  "customProps": {
+    "description": "Foundations of Physical AI and embodied intelligence - bridging digital AI with the physical world",
+    "estimatedHours": 12,
+    "prerequisites": ["Basic AI/ML concepts", "Python programming", "Familiarity with neural networks"],
+    "learningObjectives": [
+      "Define Physical AI and contrast it with traditional digital AI",
+      "Explain embodied intelligence and the role of physical constraints",
+      "Identify key challenges in real-world robotics deployment",
+      "Survey humanoid robot applications and use cases",
+      "Understand the tools ecosystem: ROS 2, Gazebo, NVIDIA Isaac"
+    ]
+  }
+}
