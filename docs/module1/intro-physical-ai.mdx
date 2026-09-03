@@ -1,0 +1,393 @@
+---
+title: Introduction to Physical AI
+sidebar_label: 1. Introduction to Physical AI
+sidebar_position: 1
+description: Understand Physical AI foundations — embodied intelligence, the humanoid robotics landscape, and the sensor systems that give robots their perception of the world.
+keywords: [physical ai, embodied intelligence, humanoid robotics, sensors, lidar, imu, force torque]
+tags: [module1, foundations, physical-ai, sensors]
+---
+
+# Introduction to Physical AI
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Define Physical AI and contrast it with purely digital AI systems
+- Explain the concept of embodied intelligence and why a physical body shapes cognition
+- Survey the current humanoid robotics landscape and identify major platforms
+- Describe the core sensor modalities used in humanoid robots: LiDAR, cameras, IMUs, and force/torque sensors
+
+---
+
+## 1.1 What is Physical AI?
+
+Ask a large language model to clean your kitchen. It can generate a detailed plan — clear the counter, load the dishwasher, wipe surfaces — but it cannot execute a single step. The model has no arms, no eyes, no sense of how heavy a plate is or how slippery a wet floor feels. It exists entirely in the space of tokens and probabilities.
+
+**Physical AI** bridges this gap. It refers to AI systems that operate in and interact with the real, physical world through embodied agents — primarily robots.
+
+:::tip Core Definition
+**Physical AI** = Perception + Reasoning + Physical Action. An AI system that senses the environment, reasons about physical constraints (gravity, friction, collisions), and acts through motors, grippers, or legs.
+:::
+
+### The Three Pillars of Physical AI
+
+| Pillar | Digital AI | Physical AI |
+|--------|-----------|-------------|
+| **Perception** | Text, images, structured data | Cameras, LiDAR, IMUs, force sensors — noisy, continuous, real-time |
+| **Reasoning** | Language understanding, classification, generation | Spatial reasoning, physics prediction, motion planning |
+| **Action** | Generate text, API calls, file writes | Move joints, grip objects, walk, balance |
+
+The critical difference is the **closed loop**: a Physical AI system acts, observes the result of its action, and adjusts. When a robot reaches for a cup and the cup slides, it must detect the slip in milliseconds and correct its grasp. There is no "undo" button in the physical world.
+
+### From Digital AI to Physical AI
+
+The progression from digital to physical AI follows a clear trajectory:
+
+```
+Digital AI          Embodied AI           Physical AI
+(Pure Software)     (Sim + Hardware)      (Real-World Deployment)
+─────────────────────────────────────────────────────────────
+GPT, BERT,          Simulated robots,     Warehouse robots,
+image classifiers   digital twins         humanoid assistants
+                                          surgical robots
+
+Key Addition:       Key Addition:         Key Addition:
+  None                Physics engine        Real physics,
+                      Simulated sensors     Real sensors,
+                      Virtual actuators     Real actuators
+```
+
+Each step adds constraints. A simulated robot can be reset after a fall; a physical robot risks damaged hardware. A simulated camera returns perfect depth maps; a real camera has lens distortion, motion blur, and lighting changes. These constraints are not bugs — they are the defining feature of Physical AI.
+
+### Why Physical AI Matters Now
+
+Several converging trends make Physical AI practical today:
+
+1. **Foundation models for robotics**: Models trained on internet-scale data can now provide semantic understanding (recognizing objects, understanding instructions) that previously required hand-crafted perception pipelines.
+
+2. **Sim-to-real transfer**: Training policies in simulation and deploying on real hardware has matured dramatically, reducing the need for expensive real-world data collection.
+
+3. **Hardware cost reduction**: Actuators, sensors, and compute boards have dropped in price while improving in capability.
+
+4. **ROS 2 maturity**: The middleware ecosystem (which you will master in this module) now provides production-grade communication, real-time guarantees, and a massive library of packages.
+
+---
+
+## 1.2 Embodied Intelligence
+
+A brain without a body is a fundamentally different kind of intelligence than a brain with one. This insight, central to the field of **embodied cognition**, has profound implications for robotics.
+
+### The Embodiment Hypothesis
+
+The embodiment hypothesis states that intelligence is not just a property of the brain (or the neural network) but arises from the dynamic interaction between brain, body, and environment. Consider how a human infant learns to grasp:
+
+1. The infant reaches randomly, sometimes contacting objects
+2. Contact produces tactile feedback — texture, temperature, resistance
+3. The visual system correlates what it sees with what it feels
+4. Over thousands of attempts, a coordinated reach-and-grasp emerges
+
+The body is not just executing commands from the brain; the body's physical properties (finger length, joint flexibility, skin sensitivity) **shape what the brain learns**. A robot with rigid parallel-jaw grippers learns a fundamentally different grasping strategy than one with soft, compliant fingers.
+
+### Morphological Computation
+
+Some computation is performed by the body itself, not the brain. This is called **morphological computation**:
+
+- **Passive dynamics in walking**: A well-designed leg with the right mass distribution can walk down a slope with zero motor input. The physics of the pendulum does the computation.
+- **Compliant grasping**: A soft gripper conforms to objects automatically. The brain sends "close gripper" and the material properties handle the rest.
+- **Whisker sensing**: A flexible whisker bends on contact, and the bend pattern directly encodes the shape of the contacted object.
+
+```python
+# Conceptual example: How embodiment changes the control problem
+
+# Without embodiment - the controller must handle everything
+class DisembodiedController:
+    def grasp(self, object_shape, object_weight, friction_coeff):
+        # Must compute exact finger positions
+        # Must compute exact grip force
+        # Must model contact mechanics
+        # Must handle every edge case in software
+        force = self.compute_exact_grip_force(object_weight, friction_coeff)
+        positions = self.compute_finger_positions(object_shape)
+        return GraspCommand(force=force, positions=positions)
+
+# With embodiment - compliant hardware simplifies the problem
+class EmbodiedController:
+    def grasp(self, detected_object):
+        # Soft fingers conform to shape automatically
+        # Material compliance handles force distribution
+        # Controller only needs "close until contact"
+        return GraspCommand(action="close", speed="slow")
+```
+
+### Intelligence Through Interaction
+
+Physical AI must reason about affordances — what actions the environment permits. A table affords placing objects on it. A door handle affords pulling or pushing. A staircase affords climbing. These affordances are defined by the relationship between the robot's body and the environment, not by either one alone.
+
+:::info Key Insight
+Digital AI processes information. Physical AI processes information **and** physics. Every decision must account for gravity, friction, inertia, compliance, and the irreversibility of physical actions.
+:::
+
+---
+
+## 1.3 The Humanoid Robotics Landscape
+
+Why build robots that look like humans? The answer is pragmatic: the world is designed for the human body. Door handles are at human hand height. Stairs are sized for human legs. Tools are shaped for human grippers. A humanoid form factor gives a robot immediate access to the built environment without modification.
+
+### Major Humanoid Platforms
+
+| Platform | Organization | Key Features | Primary Use Case |
+|----------|-------------|--------------|------------------|
+| Atlas | Boston Dynamics | Hydraulic/electric, extreme agility | Research, industrial |
+| Optimus | Tesla | Electric, low-cost target | Manufacturing, household |
+| Figure 02 | Figure AI | AI-driven manipulation | Warehouse, logistics |
+| Digit | Agility Robotics | Bipedal, built for warehouses | Package handling |
+| H1/G1 | Unitree | Affordable research platform | Academic research |
+| Phoenix | Sanctuary AI | Dexterous hands, carbon intelligence | General purpose |
+| NEO | 1X Technologies | Safe human interaction | Home assistance |
+
+### Degrees of Freedom
+
+A humanoid robot's complexity is often measured in **degrees of freedom (DoF)** — the number of independent joint motions. The human body has approximately 244 DoF (most in the hands). Current humanoid robots typically have:
+
+- **Legs**: 6 DoF per leg (hip: 3, knee: 1, ankle: 2) = 12 DoF
+- **Arms**: 7 DoF per arm (shoulder: 3, elbow: 1, wrist: 3) = 14 DoF
+- **Torso**: 2-3 DoF (waist rotation, flexion)
+- **Hands**: 6-20 DoF per hand (depending on dexterity)
+- **Head/Neck**: 2-3 DoF (pan, tilt)
+
+A typical full-body humanoid has **30 to 50+ DoF**, each requiring coordinated control — a control problem that ROS 2 helps solve through its distributed node architecture.
+
+### The Control Challenge
+
+Controlling a humanoid robot is fundamentally a real-time, multi-objective optimization problem:
+
+```python
+# Simplified humanoid control loop (conceptual)
+import numpy as np
+
+class HumanoidController:
+    """
+    A humanoid must simultaneously:
+    1. Maintain balance (center of mass over support polygon)
+    2. Track desired trajectories (arm reaching, walking)
+    3. Avoid collisions (self-collision and environment)
+    4. Respect joint limits and torque limits
+    5. React to disturbances (someone bumps the robot)
+    """
+
+    def __init__(self, num_joints: int = 40):
+        self.num_joints = num_joints
+        self.joint_positions = np.zeros(num_joints)
+        self.joint_velocities = np.zeros(num_joints)
+
+    def compute_control(self, desired_state, sensor_readings):
+        # Balance controller (highest priority)
+        com_position = self.compute_center_of_mass()
+        support_polygon = self.compute_support_polygon(sensor_readings.foot_contacts)
+        balance_torques = self.balance_controller(com_position, support_polygon)
+
+        # Task controller (track desired motion)
+        task_torques = self.task_controller(desired_state)
+
+        # Combine with priority: balance > task > posture
+        # This is solved as a quadratic program in practice
+        return self.prioritized_control(balance_torques, task_torques)
+
+    def control_loop(self):
+        """Must run at 1000 Hz for stable bipedal walking."""
+        CONTROL_RATE_HZ = 1000
+        dt = 1.0 / CONTROL_RATE_HZ
+        # In ROS 2, this would be a timer callback in a node
+        pass
+```
+
+This is why we need ROS 2: it provides the real-time communication infrastructure that lets perception nodes, planning nodes, and control nodes work together at the speeds that bipedal locomotion demands.
+
+---
+
+## 1.4 Sensor Systems for Physical AI
+
+A robot without sensors is blind and deaf. Physical AI requires rich, multi-modal sensing to build an internal model of the world. Here we cover the four sensor families most critical to humanoid robotics.
+
+### Cameras and Vision Systems
+
+Cameras are the highest-bandwidth sensors on most robots. Modern humanoid robots use several camera types:
+
+**RGB Cameras** provide color images for object recognition, face detection, and scene understanding. Typical configurations include stereo pairs for depth estimation.
+
+**Depth Cameras** (Intel RealSense, Azure Kinect) provide per-pixel distance measurements using structured light or time-of-flight. They produce **point clouds** — 3D representations of the visible scene.
+
+**Event Cameras** detect per-pixel brightness changes asynchronously, providing microsecond-level temporal resolution for fast motion tracking.
+
+```python
+# Example: Processing a depth image to create a point cloud
+import numpy as np
+
+def depth_to_point_cloud(depth_image, camera_intrinsics):
+    """
+    Convert a depth image to a 3D point cloud.
+
+    Args:
+        depth_image: HxW array of depth values in meters
+        camera_intrinsics: dict with 'fx', 'fy', 'cx', 'cy'
+
+    Returns:
+        Nx3 array of 3D points
+    """
+    height, width = depth_image.shape
+    fx = camera_intrinsics['fx']
+    fy = camera_intrinsics['fy']
+    cx = camera_intrinsics['cx']
+    cy = camera_intrinsics['cy']
+
+    # Create pixel coordinate grids
+    u = np.arange(width)
+    v = np.arange(height)
+    u, v = np.meshgrid(u, v)
+
+    # Back-project to 3D
+    z = depth_image
+    x = (u - cx) * z / fx
+    y = (v - cy) * z / fy
+
+    # Stack into Nx3 array, removing invalid (zero-depth) points
+    points = np.stack([x, y, z], axis=-1).reshape(-1, 3)
+    valid = points[:, 2] > 0
+    return points[valid]
+```
+
+### LiDAR (Light Detection and Ranging)
+
+LiDAR sensors emit laser pulses and measure the time for each pulse to return after hitting a surface. This produces highly accurate distance measurements (millimeter precision) over ranges of 10 to 100+ meters.
+
+| LiDAR Type | How It Works | Typical Use |
+|------------|-------------|-------------|
+| **Spinning** (Velodyne, Ouster) | Rotating laser array, 360-degree coverage | Outdoor navigation, mapping |
+| **Solid-state** (Livox, Hesai) | No moving parts, limited FoV | Automotive, cost-sensitive |
+| **Flash** | Illuminates entire scene at once | Short-range 3D capture |
+
+For humanoid robots, LiDAR is particularly valuable for:
+- **SLAM** (Simultaneous Localization and Mapping): Building a map while tracking the robot's position
+- **Obstacle detection**: Identifying barriers during navigation
+- **Terrain assessment**: Evaluating ground surfaces before stepping
+
+### IMUs (Inertial Measurement Units)
+
+An IMU combines accelerometers (measuring linear acceleration) and gyroscopes (measuring angular velocity) to track orientation and movement. Most include a magnetometer for absolute heading reference.
+
+For bipedal robots, the IMU is **mission-critical**. It provides:
+
+- **Body orientation**: Is the robot tilting? How fast?
+- **Impact detection**: Did the foot just hit the ground?
+- **Slip detection**: Is the base accelerating unexpectedly?
+
+```python
+# Example: Simple complementary filter for IMU orientation estimation
+import numpy as np
+
+class ComplementaryFilter:
+    """
+    Fuses gyroscope and accelerometer data for orientation estimation.
+    The gyroscope is accurate short-term but drifts.
+    The accelerometer gives absolute gravity direction but is noisy.
+    """
+
+    def __init__(self, alpha=0.98):
+        self.alpha = alpha  # Weight for gyroscope (trust short-term)
+        self.pitch = 0.0
+        self.roll = 0.0
+
+    def update(self, gyro_rates, accel_data, dt):
+        """
+        Args:
+            gyro_rates: [gx, gy, gz] in rad/s
+            accel_data: [ax, ay, az] in m/s^2
+            dt: time step in seconds
+        """
+        # Integrate gyroscope (fast, but drifts)
+        gyro_pitch = self.pitch + gyro_rates[1] * dt
+        gyro_roll = self.roll + gyro_rates[0] * dt
+
+        # Compute angles from accelerometer (noisy, but no drift)
+        accel_pitch = np.arctan2(accel_data[0],
+                                  np.sqrt(accel_data[1]**2 + accel_data[2]**2))
+        accel_roll = np.arctan2(accel_data[1],
+                                 np.sqrt(accel_data[0]**2 + accel_data[2]**2))
+
+        # Fuse: trust gyro short-term, accel long-term
+        self.pitch = self.alpha * gyro_pitch + (1 - self.alpha) * accel_pitch
+        self.roll = self.alpha * gyro_roll + (1 - self.alpha) * accel_roll
+
+        return self.pitch, self.roll
+```
+
+### Force/Torque Sensors
+
+Force/torque (F/T) sensors measure the forces and torques applied at a specific point — typically at the wrist (for manipulation) and at the feet (for locomotion).
+
+**Wrist F/T sensors** enable:
+- Detecting contact with objects
+- Measuring grip force to prevent crushing or dropping
+- Impedance control (making the arm behave like a spring)
+
+**Foot F/T sensors** enable:
+- Detecting ground contact during walking
+- Measuring the **Center of Pressure (CoP)** — critical for balance
+- Estimating ground reaction forces for dynamic locomotion
+
+:::warning Sensor Fusion is Essential
+No single sensor provides a complete picture. Physical AI systems must **fuse** data from all sensor modalities — combining camera semantics ("that is a table"), LiDAR geometry ("the table surface is 0.75m high"), IMU dynamics ("I am leaning 2 degrees forward"), and F/T feedback ("my hand is pressing with 5N of force"). Sensor fusion is a theme that will recur throughout this course.
+:::
+
+### Sensor Data Rates and the Need for Middleware
+
+Different sensors produce data at vastly different rates:
+
+| Sensor | Typical Rate | Data Size per Message |
+|--------|-------------|----------------------|
+| IMU | 200-1000 Hz | ~100 bytes |
+| Force/Torque | 100-1000 Hz | ~50 bytes |
+| Joint encoders | 1000 Hz | ~200 bytes |
+| LiDAR | 10-20 Hz | ~1 MB |
+| RGB Camera | 30-60 Hz | ~2 MB |
+| Depth Camera | 30 Hz | ~1 MB |
+
+A humanoid robot with full sensing produces **hundreds of megabytes per second** of data that must be routed to the right processing nodes with the right timing guarantees. This is exactly the problem that ROS 2 solves — and why it is the subject of the rest of this module.
+
+---
+
+## 1.5 Summary
+
+Physical AI extends artificial intelligence from the digital realm into the physical world. Unlike digital AI, Physical AI systems must:
+
+- Close the perception-action loop in real time
+- Reason about physics: gravity, friction, inertia, contact
+- Handle noisy, continuous sensor streams from multiple modalities
+- Coordinate dozens of actuators simultaneously
+
+Humanoid robots represent the most complex Physical AI challenge — and ROS 2 provides the middleware backbone that makes this coordination possible. In the next chapter, we dive into the ROS 2 architecture.
+
+---
+
+## Exercises
+
+### Review Questions
+
+1. **Compare and contrast** digital AI and Physical AI across three dimensions: perception, reasoning, and action. Give a concrete example for each.
+
+2. **Explain** the embodiment hypothesis and provide two examples of morphological computation that simplify a robot's control problem.
+
+3. A humanoid robot has 7 DoF per arm, 6 DoF per leg, 3 DoF in the waist, and 12 DoF per hand. Calculate the total degrees of freedom and explain why this number matters for control.
+
+4. **Describe** the strengths and weaknesses of LiDAR versus depth cameras for a humanoid robot navigating an indoor office environment.
+
+5. Why is a complementary filter used for IMU data instead of relying solely on the gyroscope or solely on the accelerometer?
+
+### Hands-On
+
+6. **Sensor Data Rate Calculation**: A humanoid robot has 2 RGB cameras (1920x1080 at 30 Hz, 3 bytes per pixel), 1 LiDAR (300,000 points at 10 Hz, 16 bytes per point), and an IMU at 500 Hz (24 bytes per reading). Calculate the total data bandwidth in MB/s. What does this imply about the need for efficient middleware?
+
+7. **Research Exercise**: Choose one humanoid robot platform from the table in Section 1.3. Research its sensor suite and create a table listing each sensor, its type, its data rate, and its purpose in the robot's operation.
+
+8. **Code Exercise**: Extend the `depth_to_point_cloud` function to also accept an RGB image and return a colored point cloud (Nx6 array with x, y, z, r, g, b columns).

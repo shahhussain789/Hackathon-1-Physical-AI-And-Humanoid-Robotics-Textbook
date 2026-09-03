@@ -1,0 +1,415 @@
+---
+title: Building with Python & rclpy
+sidebar_label: Python & rclpy
+sidebar_position: 4
+description: Create complete ROS 2 Python packages — publishers, subscribers, launch files, parameters, and bridging AI agents to robot controllers.
+keywords: [rclpy, python ros2, launch files, parameters, ros2 package, ament python]
+tags: [module1, ros2, python, rclpy]
+---
+
+# Building with Python & rclpy
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Create a complete ROS 2 Python package from scratch
+- Write reusable publisher and subscriber nodes with rclpy
+- Configure launch files for multi-node systems
+- Use ROS 2 parameters for runtime configuration
+- Bridge Python AI agents to ROS 2 robot controllers
+
+## Creating a ROS 2 Python Package
+
+Let's build a complete package for controlling a humanoid robot:
+
+```bash
+cd ~/ros2_ws/src
+
+# Create the package
+ros2 pkg create --build-type ament_python humanoid_controller \
+    --dependencies rclpy std_msgs geometry_msgs sensor_msgs
+
+cd humanoid_controller
+```
+
+### Package Structure
+
+```
+humanoid_controller/
+├── package.xml                  # Dependencies and metadata
+├── setup.py                     # Python package config
+├── setup.cfg                    # Entry point mapping
+├── resource/
+│   └── humanoid_controller      # Package marker (empty file)
+├── humanoid_controller/         # Python module
+│   ├── __init__.py
+│   ├── joint_commander.py       # Joint control node
+│   ├── sensor_reader.py         # Sensor processing node
+│   └── ai_bridge.py            # AI agent bridge
+├── launch/
+│   └── humanoid.launch.py       # Launch file
+├── config/
+│   └── robot_params.yaml        # Parameters
+└── test/
+    ├── test_copyright.py
+    ├── test_flake8.py
+    └── test_pep257.py
+```
+
+### setup.py Configuration
+
+```python
+from setuptools import find_packages, setup
+import os
+from glob import glob
+
+package_name = 'humanoid_controller'
+
+setup(
+    name=package_name,
+    version='0.1.0',
+    packages=find_packages(exclude=['test']),
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'),
+            glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'),
+            glob('config/*.yaml')),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='developer',
+    maintainer_email='dev@example.com',
+    description='Humanoid robot controller package',
+    license='MIT',
+    entry_points={
+        'console_scripts': [
+            'joint_commander = humanoid_controller.joint_commander:main',
+            'sensor_reader = humanoid_controller.sensor_reader:main',
+            'ai_bridge = humanoid_controller.ai_bridge:main',
+        ],
+    },
+)
+```
+
+:::warning Entry Points Are Critical
+The `console_scripts` in `setup.py` is how ROS 2 discovers your nodes. Without this, `ros2 run humanoid_controller joint_commander` won't work. The format is:
+```
+'executable_name = package.module:function'
+```
+:::
+
+## A Complete Joint Commander Node
+
+This node commands joint positions for a humanoid robot:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
+import math
+
+
+class JointCommander(Node):
+    def __init__(self):
+        super().__init__('joint_commander')
+
+        # Declare parameters with defaults
+        self.declare_parameter('joint_names', [
+            'left_hip', 'left_knee', 'left_ankle',
+            'right_hip', 'right_knee', 'right_ankle'
+        ])
+        self.declare_parameter('publish_rate', 50.0)
+
+        # Get parameter values
+        self.joint_names = self.get_parameter('joint_names') \
+            .get_parameter_value().string_array_value
+        rate = self.get_parameter('publish_rate') \
+            .get_parameter_value().double_value
+
+        # Publisher for joint commands
+        self.cmd_pub = self.create_publisher(
+            Float64MultiArray, '/joint_commands', 10
+        )
+
+        # Subscriber for current joint states
+        self.state_sub = self.create_subscription(
+            JointState, '/joint_states',
+            self.joint_state_callback, 10
+        )
+
+        # Timer for periodic publishing
+        self.timer = self.create_timer(1.0 / rate, self.command_loop)
+
+        self.current_positions = {}
+        self.target_positions = [0.0] * len(self.joint_names)
+        self.time = 0.0
+
+        self.get_logger().info(
+            f'Joint commander started for {len(self.joint_names)} joints'
+        )
+
+    def joint_state_callback(self, msg):
+        for name, position in zip(msg.name, msg.position):
+            self.current_positions[name] = position
+
+    def command_loop(self):
+        self.time += 0.02
+
+        # Simple walking pattern: sinusoidal joint motion
+        msg = Float64MultiArray()
+        msg.data = [
+            0.3 * math.sin(self.time * 2.0),       # left_hip
+            -0.6 * abs(math.sin(self.time * 2.0)),  # left_knee
+            0.2 * math.sin(self.time * 2.0),        # left_ankle
+            0.3 * math.sin(self.time * 2.0 + math.pi),       # right_hip
+            -0.6 * abs(math.sin(self.time * 2.0 + math.pi)), # right_knee
+            0.2 * math.sin(self.time * 2.0 + math.pi),       # right_ankle
+        ]
+
+        self.cmd_pub.publish(msg)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = JointCommander()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+```
+
+## ROS 2 Parameters
+
+Parameters allow runtime configuration without changing code.
+
+### Parameter File (YAML)
+
+```yaml
+# config/robot_params.yaml
+joint_commander:
+  ros__parameters:
+    joint_names:
+      - left_hip
+      - left_knee
+      - left_ankle
+      - right_hip
+      - right_knee
+      - right_ankle
+    publish_rate: 50.0
+
+sensor_reader:
+  ros__parameters:
+    lidar_topic: /scan
+    camera_topic: /camera/image_raw
+    warning_distance: 0.5
+```
+
+### Loading Parameters at Runtime
+
+```bash
+# Pass parameters via command line
+ros2 run humanoid_controller joint_commander \
+    --ros-args -p publish_rate:=100.0
+
+# Load from YAML file
+ros2 run humanoid_controller joint_commander \
+    --ros-args --params-file config/robot_params.yaml
+
+# Change parameter at runtime
+ros2 param set /joint_commander publish_rate 30.0
+
+# List all parameters of a node
+ros2 param list /joint_commander
+```
+
+## Launch Files
+
+Launch files start multiple nodes simultaneously with configuration:
+
+```python
+# launch/humanoid.launch.py
+from launch import LaunchDescription
+from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
+
+
+def generate_launch_description():
+    pkg_dir = get_package_share_directory('humanoid_controller')
+    params_file = os.path.join(pkg_dir, 'config', 'robot_params.yaml')
+
+    return LaunchDescription([
+        # Joint commander node
+        Node(
+            package='humanoid_controller',
+            executable='joint_commander',
+            name='joint_commander',
+            parameters=[params_file],
+            output='screen',
+        ),
+
+        # Sensor reader node
+        Node(
+            package='humanoid_controller',
+            executable='sensor_reader',
+            name='sensor_reader',
+            parameters=[params_file],
+            output='screen',
+        ),
+
+        # AI bridge node
+        Node(
+            package='humanoid_controller',
+            executable='ai_bridge',
+            name='ai_bridge',
+            output='screen',
+            remappings=[
+                ('/ai_commands', '/joint_commands'),
+            ],
+        ),
+    ])
+```
+
+### Running the Launch File
+
+```bash
+# Build first
+cd ~/ros2_ws && colcon build --packages-select humanoid_controller
+
+# Source
+source install/setup.bash
+
+# Launch
+ros2 launch humanoid_controller humanoid.launch.py
+```
+
+## Bridging Python AI Agents to ROS 2
+
+The real power of ROS 2 with Python comes from connecting AI models to robot controllers:
+
+```python
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+import numpy as np
+
+
+class AIBridge(Node):
+    """Bridges an AI decision-making agent to ROS 2 robot control."""
+
+    def __init__(self):
+        super().__init__('ai_bridge')
+        self.bridge = CvBridge()
+
+        # Subscribe to camera for perception
+        self.image_sub = self.create_subscription(
+            Image, '/camera/image_raw',
+            self.image_callback, 10
+        )
+
+        # Publish velocity commands
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        # Decision timer (10 Hz — AI inference loop)
+        self.timer = self.create_timer(0.1, self.decide_and_act)
+
+        self.latest_image = None
+        self.get_logger().info('AI Bridge node started')
+
+    def image_callback(self, msg):
+        self.latest_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+
+    def decide_and_act(self):
+        if self.latest_image is None:
+            return
+
+        # Run AI inference on the image
+        action = self.run_ai_model(self.latest_image)
+
+        # Convert AI decision to robot command
+        cmd = Twist()
+        cmd.linear.x = float(action['forward_speed'])
+        cmd.angular.z = float(action['turn_rate'])
+        self.cmd_pub.publish(cmd)
+
+    def run_ai_model(self, image):
+        """Replace with your actual AI model inference."""
+        # Placeholder: simple obstacle avoidance
+        height, width = image.shape[:2]
+        left_half = image[:, :width//2]
+        right_half = image[:, width//2:]
+
+        left_mean = np.mean(left_half)
+        right_mean = np.mean(right_half)
+
+        return {
+            'forward_speed': 0.3,
+            'turn_rate': 0.1 if left_mean > right_mean else -0.1
+        }
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AIBridge()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+```
+
+:::info The AI Bridge Pattern
+This pattern is fundamental for Physical AI:
+1. **Perceive**: Subscribe to sensor topics (cameras, LiDAR)
+2. **Think**: Run AI model inference
+3. **Act**: Publish control commands
+
+Every module in this book builds on this pattern — from simple reactive behaviors to complex VLA systems in Module 4.
+:::
+
+## Building and Running
+
+```bash
+# Build
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select humanoid_controller
+
+# Source
+source install/setup.bash
+
+# Run individual node
+ros2 run humanoid_controller joint_commander
+
+# Run full system via launch
+ros2 launch humanoid_controller humanoid.launch.py
+```
+
+## Summary
+
+| Component | Purpose | File |
+|-----------|---------|------|
+| **package.xml** | Declare dependencies | package.xml |
+| **setup.py** | Register entry points | setup.py |
+| **Node classes** | Implement robot behaviors | humanoid_controller/*.py |
+| **Parameters** | Runtime configuration | config/*.yaml |
+| **Launch files** | Orchestrate multi-node systems | launch/*.launch.py |
+
+## Exercises
+
+1. **Build a package**: Create a `humanoid_walker` package with a node that publishes alternating left/right leg joint angles on a timer.
+
+2. **Parameter tuning**: Add a `step_frequency` parameter to your walking node. Change it at runtime using `ros2 param set` and observe the effect.
+
+3. **Launch file**: Write a launch file that starts your walker node and a `joint_state_publisher` node together, loading parameters from a YAML file.
+
+4. **AI bridge**: Modify the `AIBridge` example to subscribe to a LiDAR `/scan` topic instead of camera, and implement simple obstacle avoidance (stop if obstacle < 0.3m, turn otherwise).
+
+5. **Integration**: Create a two-node system where Node A generates random target positions and Node B moves joints toward those targets using a simple proportional controller.
+
+---
+
+**Next**: [URDF for Humanoid Robots](urdf-humanoids) — describe your robot's body in XML so simulators and tools can understand it.

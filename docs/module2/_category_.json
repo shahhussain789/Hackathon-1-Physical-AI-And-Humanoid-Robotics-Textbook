@@ -1,5 +1,5 @@
 {
-  "label": "Module 2: Humanoid Control Fundamentals",
+  "label": "Module 2: The Digital Twin (Gazebo & Unity)",
   "position": 3,
   "collapsed": false,
   "link": {
@@ -7,15 +7,15 @@
     "id": "module2/index"
   },
   "customProps": {
-    "description": "Master the fundamentals of robot control - from kinematics and dynamics to PID controllers and simulation environments",
-    "estimatedHours": 16,
-    "prerequisites": ["Module 1", "Linear algebra (vectors, matrices)", "Basic calculus (derivatives)", "Physics (Newton's laws)"],
+    "description": "Master physics simulation and environment building with Gazebo and Unity for humanoid robotics development",
+    "estimatedHours": 14,
+    "prerequisites": ["Module 1", "Basic Linux command line", "Python fundamentals", "ROS 2 basics from Module 1"],
     "learningObjectives": [
-      "Apply forward and inverse kinematics to humanoid robot arms and legs",
-      "Understand robot dynamics and how physical laws constrain motion",
-      "Design and implement PID and model predictive controllers",
-      "Simulate humanoid robots in Gazebo and NVIDIA Isaac Sim",
-      "Analyze and debug control systems using ROS 2 tools"
+      "Set up and configure Gazebo for physics simulation",
+      "Build robot models using URDF and SDF formats",
+      "Simulate LiDAR, depth cameras, IMUs, and other sensors",
+      "Integrate Gazebo with ROS 2 for complete simulation pipelines",
+      "Use Unity for high-fidelity robot visualization and human-robot interaction"
     ]
   }
 }

@@ -1,73 +1,101 @@
 ---
 id: index
-title: Module 1 - Introduction to Physical AI
+title: Module 1 - The Robotic Nervous System (ROS 2)
 sidebar_label: Overview
 sidebar_position: 0
-description: Learn the foundations of Physical AI - how artificial intelligence extends beyond digital spaces into the physical world through embodied intelligence.
-keywords: [physical ai, embodied intelligence, humanoid robotics, robotics fundamentals, ROS 2]
+description: Master the middleware that powers modern robots — from ROS 2 fundamentals to building Python-controlled humanoid systems with URDF descriptions.
+keywords: [ros 2, robot operating system, rclpy, urdf, humanoid robotics, physical ai, middleware]
 ---
 
-# Module 1: Introduction to Physical AI
+# Module 1: The Robotic Nervous System (ROS 2)
 
-## Welcome to Physical AI
+## Welcome to the Robotic Nervous System
 
-The future of AI extends beyond digital spaces into the physical world. This module introduces **Physical AI**—AI systems that function in reality, comprehend physical laws, and interact with the environment through embodied agents.
+Just as the human nervous system coordinates signals between the brain, spinal cord, and muscles, a robot needs a communication backbone that connects perception, reasoning, and actuation. In modern robotics, that backbone is **ROS 2** — the Robot Operating System 2.
+
+This module takes you from the foundations of Physical AI through the complete ROS 2 stack. By the end, you will be writing Python nodes that publish sensor data, calling services to trigger robot behaviors, and describing humanoid robot bodies in URDF that you can visualize and simulate.
 
 ## What You'll Learn
-
-In this module, you'll discover how AI transitions from purely digital computation to physical embodiment, enabling robots to perceive, reason about, and act in the real world.
 
 ### Learning Objectives
 
 By the end of this module, you will be able to:
 
-✅ **Define Physical AI** and explain how it differs from traditional AI systems
-✅ **Understand embodied intelligence** and why the physical body matters for intelligence
-✅ **Identify challenges** unique to physical AI (sensing, acting, learning in reality)
-✅ **Survey humanoid robotics** applications and understand why human form is advantageous
-✅ **Navigate the tools ecosystem** including ROS 2, Gazebo, and NVIDIA Isaac Sim
+- **Define Physical AI** and articulate how embodied intelligence differs from digital-only AI
+- **Explain the ROS 2 architecture**, including DDS middleware, QoS policies, and the computation graph
+- **Implement nodes, topics, services, and actions** using Python and rclpy
+- **Build complete ROS 2 packages** with launch files, parameters, and proper project structure
+- **Author URDF models** for humanoid robots and visualize them in RViz2
+- **Bridge Python AI agents** to ROS 2 controllers for autonomous robot behavior
 
 ## Module Structure
 
-This module consists of 5 chapters:
+This module spans **Weeks 1 through 5** of the course and is organized into five chapters:
 
-### 1. What is Physical AI?
-Learn the fundamental concepts of Physical AI and how it differs from digital AI systems you've worked with before.
+### Chapter 1: Introduction to Physical AI
+Lay the conceptual foundation. Learn what Physical AI means, how embodied intelligence works, survey the humanoid robotics landscape, and understand the sensor systems that give robots their senses.
 
-### 2. Embodied Intelligence
-Explore how physical bodies shape intelligence and why robots need to understand the physical world.
+### Chapter 2: ROS 2 Architecture & Core Concepts
+Dive into the engineering backbone. Understand why ROS 2 replaced ROS 1, how DDS middleware enables real-time communication, and set up your development environment with workspaces and colcon.
 
-### 3. Challenges in Physical AI
-Understand the unique difficulties of sensing, acting, and learning in the real world versus simulation.
+### Chapter 3: Nodes, Topics, Services & Actions
+Master the four communication primitives. Build publisher/subscriber pipelines, request/response services, and long-running action servers — the patterns that compose every robot system.
 
-### 4. Humanoid Robotics
-Discover why human-shaped robots are valuable and survey current humanoid platforms.
+### Chapter 4: Building with Python & rclpy
+Go from concepts to code. Create full ROS 2 Python packages, write launch files, manage parameters, and learn the patterns for bridging AI inference engines to robot controllers.
 
-### 5. Tools Overview
-Get introduced to the essential tools: ROS 2 for robot control, Gazebo for simulation, and NVIDIA Isaac for advanced AI.
+### Chapter 5: URDF for Humanoid Robots
+Describe the robot body. Author URDF files that define links, joints, and kinematic chains for a humanoid, then visualize and refine your model using RViz2 and Xacro macros.
+
+## Weekly Roadmap
+
+| Week | Focus | Chapters |
+|------|-------|----------|
+| 1 | Physical AI foundations, embodied intelligence | Chapter 1 |
+| 2 | Humanoid landscape, sensor systems | Chapter 1 (continued) |
+| 3 | ROS 2 architecture, installation, workspace setup | Chapter 2 |
+| 4 | Nodes, topics, services, actions in depth | Chapters 3 & 4 |
+| 5 | Python packages, launch files, URDF for humanoids | Chapters 4 & 5 |
 
 ## Prerequisites
 
 Before starting this module, you should have:
 
-- **Basic AI/ML knowledge**: Familiarity with supervised learning, neural networks, and training concepts
-- **Python programming**: Comfortable writing Python code and using libraries like NumPy
-- **Computer science fundamentals**: Understanding of algorithms, data structures, and systems
+- **Python programming**: Comfortable writing classes, using pip, and working with libraries like NumPy
+- **Basic AI/ML knowledge**: Familiarity with neural networks, inference, and training concepts
+- **Linux command line**: Ability to navigate directories, edit files, and run shell commands
+- **Ubuntu 22.04** (recommended): ROS 2 Humble Hawksbill runs natively on Ubuntu 22.04 LTS
 
 :::tip No Robotics Experience Required!
-This course is designed for software engineers and AI practitioners **without prior robotics experience**. We'll build your understanding from first principles.
+This course is designed for software engineers and AI practitioners **without prior robotics experience**. We build every concept from first principles — if you can write a Python class and open a terminal, you are ready.
+:::
+
+## Development Environment
+
+Throughout this module you will need:
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Ubuntu | 22.04 LTS | Host operating system |
+| ROS 2 | Humble Hawksbill | Robot middleware |
+| Python | 3.10+ | Programming language |
+| colcon | Latest | Build system |
+| RViz2 | (with ROS 2) | 3D visualization |
+
+:::info Docker Alternative
+If you are on Windows or macOS, you can use the official ROS 2 Docker images. We provide Docker setup instructions in Chapter 2.
 :::
 
 ## Estimated Time
 
-- **Total**: 12 hours
-- **Reading**: 6-8 hours
-- **Hands-on exercises**: 4-6 hours
+- **Total**: 16 hours
+- **Reading & study**: 8-10 hours
+- **Hands-on coding**: 6-8 hours
 
 ## Getting Started
 
-Ready to begin? Click "Next" below or choose a chapter from the sidebar to start your journey into Physical AI!
+Ready to begin? Start with **Chapter 1: Introduction to Physical AI** to build the conceptual foundation, then progress sequentially through each chapter. Every chapter builds on the previous one, so we recommend following them in order.
 
 :::info Module Navigation
-Use the **Previous** and **Next** buttons at the bottom of each page to navigate sequentially through the module, or jump to any chapter using the sidebar.
+Use the **Previous** and **Next** buttons at the bottom of each page to navigate sequentially, or jump to any chapter using the sidebar.
 :::

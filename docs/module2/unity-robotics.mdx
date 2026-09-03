@@ -1,0 +1,706 @@
+---
+title: Unity for Robot Visualization
+sidebar_label: Unity Robotics
+sidebar_position: 5
+description: Learn to use Unity for high-fidelity robot visualization, photorealistic rendering, human-robot interaction scenarios, and ROS 2 communication via the ROS-TCP-Connector.
+keywords: [unity, robotics, visualization, ROS-TCP-Connector, URDF importer, digital twin, human-robot interaction, synthetic data]
+tags: [module2, unity, visualization, hri]
+---
+
+# Unity for Robot Visualization
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Explain why Unity is valuable for robotics beyond gaming
+- Install Unity and set up the Robotics Hub packages
+- Import URDF robot models into Unity
+- Establish communication between Unity and ROS 2 using the ROS-TCP-Connector
+- Build human-robot interaction scenarios with photorealistic environments
+- Compare Gazebo and Unity for different robotics use cases
+- Generate synthetic training data using Unity's rendering capabilities
+
+## Why Unity for Robotics?
+
+Gazebo is the standard for physics simulation. So why bring Unity -- a game engine -- into the robotics workflow?
+
+The answer is **rendering fidelity and interaction design**:
+
+| Capability | Gazebo | Unity |
+|-----------|--------|-------|
+| Physics accuracy | Excellent (DART, Bullet) | Good (PhysX, not robotics-tuned) |
+| Rendering quality | Basic to moderate | Photorealistic (HDRP, ray tracing) |
+| Sensor realism | Good noise models | Excellent visual realism for cameras |
+| HRI design | Not built for this | Native UI, animation, interaction tools |
+| Synthetic data | Basic | Industry-standard (Unity Perception) |
+| Cross-platform | Linux primarily | Windows, macOS, Linux |
+| Learning curve | Moderate (XML/SDF) | Steeper (C#, Editor) |
+| ROS 2 integration | Native (ros_gz) | Via ROS-TCP-Connector |
+
+### Use Cases for Unity in Robotics
+
+1. **Photorealistic sensor data**: Training computer vision models requires images that look like real photographs. Unity can generate images with realistic lighting, materials, and reflections that Gazebo cannot match.
+
+2. **Synthetic data generation**: Need 100,000 labeled images of objects on a kitchen counter? Unity can generate them with automatic bounding boxes, segmentation masks, and depth maps.
+
+3. **Human-robot interaction (HRI)**: Designing how a humanoid robot interacts with people requires animating human characters, facial expressions, and natural environments. Unity excels here.
+
+4. **Digital twin visualization**: While Gazebo runs the physics, Unity can provide a beautiful real-time 3D view for stakeholders, demonstrations, and remote monitoring.
+
+5. **VR/AR robotics**: Testing robot behavior in virtual reality before real-world deployment. Unity is the leading platform for XR development.
+
+:::info Unity is a Complement, Not a Replacement
+Unity does not replace Gazebo for physics simulation. Instead, it complements Gazebo by providing capabilities that physics simulators lack: photorealistic rendering, sophisticated environment design, and human character animation. Many teams run Gazebo for physics and Unity for visualization simultaneously.
+:::
+
+## Setting Up Unity for Robotics
+
+### Installing Unity
+
+1. Download **Unity Hub** from [unity.com](https://unity.com/download)
+2. Install Unity Hub and sign in (free Personal license is sufficient)
+3. Install **Unity 2022.3 LTS** (Long Term Support)
+
+```bash
+# On Ubuntu, install Unity Hub via the official .deb package
+wget -qO - https://hub.unity3d.com/linux/keys/public | sudo gpg --dearmor -o /usr/share/keyrings/Unity_Technologies_ApS.gpg
+echo "deb [signed-by=/usr/share/keyrings/Unity_Technologies_ApS.gpg] https://hub.unity3d.com/linux/repos/deb stable main" | sudo tee /etc/apt/sources.list.d/unityhub.list
+sudo apt-get update
+sudo apt-get install -y unityhub
+```
+
+### Creating a Robotics Project
+
+1. Open Unity Hub and click **New Project**
+2. Select the **3D (URP)** template (Universal Render Pipeline for good performance)
+3. Name it `RobotVisualization` and create
+
+### Installing Robotics Packages
+
+Unity's robotics packages are installed via the Package Manager. Open **Window > Package Manager** and add packages by git URL:
+
+```
+# In Unity Package Manager > Add package from git URL:
+
+# ROS-TCP-Connector (communication with ROS 2)
+https://github.com/Unity-Technologies/ROS-TCP-Connector.git?path=/com.unity.robotics.ros-tcp-connector
+
+# URDF Importer (import robot models)
+https://github.com/Unity-Technologies/URDF-Importer.git?path=/com.unity.robotics.urdf-importer
+```
+
+Alternatively, add them to your `Packages/manifest.json`:
+
+```json
+{
+  "dependencies": {
+    "com.unity.robotics.ros-tcp-connector": "https://github.com/Unity-Technologies/ROS-TCP-Connector.git?path=/com.unity.robotics.ros-tcp-connector",
+    "com.unity.robotics.urdf-importer": "https://github.com/Unity-Technologies/URDF-Importer.git?path=/com.unity.robotics.urdf-importer"
+  }
+}
+```
+
+## Importing Robot Models
+
+### URDF Import Workflow
+
+Unity can import URDF files directly using the URDF Importer package:
+
+1. Copy your robot's URDF file and mesh files into `Assets/URDF/` in your Unity project
+2. In Unity, right-click the URDF file in the Project window
+3. Select **Import Robot from URDF**
+4. Configure import settings:
+   - **Axis Type**: Y-up (Unity's convention) -- the importer handles the Z-up to Y-up conversion
+   - **Mesh Decomposition**: VHACD (for convex collision meshes)
+
+The importer creates a GameObject hierarchy matching the URDF link-joint tree, with:
+- **ArticulationBody** components for physics (Unity's equivalent of articulated joints)
+- **MeshRenderer** components for visual geometry
+- **Collider** components for physics collision
+
+### Manual Import for Custom Models
+
+For more control, you can build the robot programmatically:
+
+```csharp
+using UnityEngine;
+using Unity.Robotics.UrdfImporter;
+
+public class RobotLoader : MonoBehaviour
+{
+    [SerializeField] private string urdfPath = "Assets/URDF/my_robot.urdf";
+
+    void Start()
+    {
+        // Import the URDF at runtime
+        ImportSettings settings = new ImportSettings
+        {
+            chosenAxis = ImportSettings.axisType.yAxis,
+            convexMethod = ImportSettings.convexDecomposer.vHACD
+        };
+
+        // This creates the robot GameObject hierarchy
+        UrdfRobotExtensions.Create(urdfPath, settings);
+        Debug.Log("Robot imported successfully");
+    }
+}
+```
+
+### Enhancing Visual Quality
+
+After importing, enhance the robot's appearance:
+
+1. **Replace materials**: URDF materials are basic. Create PBR materials with metallic/roughness maps
+2. **Add environment lighting**: Use an HDRI skybox for realistic reflections
+3. **Enable shadows**: Configure directional lights with soft shadows
+4. **Post-processing**: Add bloom, ambient occlusion, and color grading
+
+```csharp
+using UnityEngine;
+
+/// <summary>
+/// Applies enhanced materials to an imported URDF robot.
+/// </summary>
+public class RobotMaterialEnhancer : MonoBehaviour
+{
+    [SerializeField] private Material robotMetal;
+    [SerializeField] private Material robotPlastic;
+    [SerializeField] private Material robotRubber;
+
+    void Start()
+    {
+        // Find all renderers in the robot hierarchy
+        var renderers = GetComponentsInChildren<MeshRenderer>();
+
+        foreach (var renderer in renderers)
+        {
+            string linkName = renderer.gameObject.name.ToLower();
+
+            // Apply materials based on link naming convention
+            if (linkName.Contains("wheel") || linkName.Contains("foot"))
+            {
+                renderer.material = robotRubber;
+            }
+            else if (linkName.Contains("joint") || linkName.Contains("motor"))
+            {
+                renderer.material = robotMetal;
+            }
+            else
+            {
+                renderer.material = robotPlastic;
+            }
+        }
+    }
+}
+```
+
+## ROS-TCP-Connector: Unity to ROS 2 Communication
+
+### Architecture
+
+The ROS-TCP-Connector establishes a TCP socket connection between Unity and a ROS 2 node:
+
+```
+┌──────────────┐         TCP/IP          ┌──────────────────────┐
+│    Unity     │ <────────────────────> │  ROS-TCP-Endpoint    │
+│              │                         │  (ROS 2 node)        │
+│  Publisher   │ ──── Messages ──────> │  -> ROS 2 Topics     │
+│  Subscriber  │ <──── Messages ────── │  <- ROS 2 Topics     │
+│  Service     │ <──── Req/Resp ─────> │  <- ROS 2 Services   │
+└──────────────┘                         └──────────────────────┘
+```
+
+### Setting Up the ROS 2 Side
+
+Install the ROS-TCP-Endpoint package:
+
+```bash
+# Clone into your ROS 2 workspace
+cd ~/ros2_ws/src
+git clone https://github.com/Unity-Technologies/ROS-TCP-Endpoint.git -b ROS2v0.7.0
+
+# Build
+cd ~/ros2_ws
+colcon build --packages-select ros_tcp_endpoint
+
+# Source
+source install/setup.bash
+```
+
+Launch the endpoint node:
+
+```bash
+ros2 run ros_tcp_endpoint default_server_endpoint --ros-args \
+  -p ROS_IP:=0.0.0.0 \
+  -p ROS_TCP_PORT:=10000
+```
+
+### Setting Up the Unity Side
+
+1. In Unity, go to **Robotics > ROS Settings**
+2. Set **ROS IP Address**: `127.0.0.1` (or the IP of your ROS 2 machine)
+3. Set **ROS Port**: `10000`
+4. Click **Connect**
+
+### Publishing from Unity to ROS 2
+
+```csharp
+using UnityEngine;
+using Unity.Robotics.ROSTCPConnector;
+using RosMessageTypes.Geometry;
+
+/// <summary>
+/// Publishes the robot's position as a ROS 2 PoseStamped message.
+/// </summary>
+public class PosePublisher : MonoBehaviour
+{
+    [SerializeField] private string topicName = "/unity/robot_pose";
+    [SerializeField] private float publishRate = 10f; // Hz
+
+    private ROSConnection ros;
+    private float timeElapsed;
+
+    void Start()
+    {
+        ros = ROSConnection.GetOrCreateInstance();
+        ros.RegisterPublisher<PoseStampedMsg>(topicName);
+    }
+
+    void Update()
+    {
+        timeElapsed += Time.deltaTime;
+
+        if (timeElapsed >= 1f / publishRate)
+        {
+            timeElapsed = 0;
+            PublishPose();
+        }
+    }
+
+    void PublishPose()
+    {
+        var position = transform.position;
+        var rotation = transform.rotation;
+
+        var msg = new PoseStampedMsg
+        {
+            header = new RosMessageTypes.Std.HeaderMsg
+            {
+                frame_id = "world"
+            },
+            pose = new PoseMsg
+            {
+                position = new PointMsg(
+                    position.z,   // Unity Z -> ROS X
+                    -position.x,  // Unity X -> ROS -Y
+                    position.y    // Unity Y -> ROS Z
+                ),
+                orientation = new QuaternionMsg(
+                    rotation.z,
+                    -rotation.x,
+                    rotation.y,
+                    -rotation.w
+                )
+            }
+        };
+
+        ros.Publish(topicName, msg);
+    }
+}
+```
+
+:::warning Coordinate Frame Differences
+Unity uses a **left-handed Y-up** coordinate system. ROS uses a **right-handed Z-up** system. You must convert coordinates when sending data between them:
+- Unity (X, Y, Z) -> ROS (Z, -X, Y)
+- ROS (X, Y, Z) -> Unity (-Y, Z, X)
+
+The URDF Importer handles this automatically for imported models, but you must handle it manually when publishing/subscribing to custom topics.
+:::
+
+### Subscribing to ROS 2 Data in Unity
+
+```csharp
+using UnityEngine;
+using Unity.Robotics.ROSTCPConnector;
+using RosMessageTypes.Sensor;
+
+/// <summary>
+/// Subscribes to joint state messages from ROS 2 and applies them to
+/// the Unity robot model.
+/// </summary>
+public class JointStateSubscriber : MonoBehaviour
+{
+    [SerializeField] private string topicName = "/joint_states";
+
+    private ArticulationBody[] joints;
+
+    void Start()
+    {
+        // Get all articulation joints in the robot hierarchy
+        joints = GetComponentsInChildren<ArticulationBody>();
+
+        // Subscribe to joint states
+        ROSConnection.GetOrCreateInstance()
+            .Subscribe<JointStateMsg>(topicName, ApplyJointStates);
+    }
+
+    void ApplyJointStates(JointStateMsg msg)
+    {
+        for (int i = 0; i < msg.name.Length && i < msg.position.Length; i++)
+        {
+            string jointName = msg.name[i];
+
+            // Find the matching joint in Unity
+            foreach (var joint in joints)
+            {
+                if (joint.gameObject.name.Contains(jointName))
+                {
+                    // Apply the joint position
+                    var drive = joint.xDrive;
+                    drive.target = (float)(msg.position[i] * Mathf.Rad2Deg);
+                    joint.xDrive = drive;
+                    break;
+                }
+            }
+        }
+    }
+}
+```
+
+## Human-Robot Interaction in Unity
+
+Unity is uniquely suited for HRI scenarios because it provides:
+
+- **Human character models**: Animated 3D humans with skeletal animation
+- **Environment assets**: Kitchens, living rooms, offices, warehouses
+- **UI systems**: Design robot interfaces, AR overlays, control panels
+- **Animation system**: Script complex interaction sequences
+
+### Building an HRI Scenario
+
+Here is an example of a robot approaching a human and performing a handover:
+
+```csharp
+using UnityEngine;
+using System.Collections;
+
+/// <summary>
+/// Demonstrates a simple human-robot object handover scenario.
+/// </summary>
+public class HandoverScenario : MonoBehaviour
+{
+    [SerializeField] private Transform robot;
+    [SerializeField] private Transform human;
+    [SerializeField] private Transform objectToHandover;
+    [SerializeField] private float approachSpeed = 0.5f;
+    [SerializeField] private float handoverDistance = 0.8f;
+
+    private enum State { Approaching, Extending, WaitingForGrasp, Retracting, Done }
+    private State currentState = State.Approaching;
+
+    void Update()
+    {
+        switch (currentState)
+        {
+            case State.Approaching:
+                // Move robot toward human
+                Vector3 direction = (human.position - robot.position).normalized;
+                float distance = Vector3.Distance(robot.position, human.position);
+
+                if (distance > handoverDistance)
+                {
+                    robot.position += direction * approachSpeed * Time.deltaTime;
+                    robot.LookAt(human);
+                }
+                else
+                {
+                    currentState = State.Extending;
+                    Debug.Log("Robot reached handover distance, extending arm...");
+                }
+                break;
+
+            case State.Extending:
+                // Trigger arm extension animation via ROS 2 or direct control
+                StartCoroutine(ExtendArm());
+                currentState = State.WaitingForGrasp;
+                break;
+
+            case State.WaitingForGrasp:
+                // Wait for human to take the object (simulated with a timer)
+                break;
+
+            case State.Done:
+                Debug.Log("Handover complete!");
+                break;
+        }
+    }
+
+    IEnumerator ExtendArm()
+    {
+        Debug.Log("Extending arm for handover");
+        yield return new WaitForSeconds(2.0f);
+
+        Debug.Log("Object released, retracting");
+        currentState = State.Done;
+    }
+}
+```
+
+### Creating Realistic Environments
+
+Unity's Asset Store and free environment packs provide pre-built interior environments:
+
+1. **Kitchen**: For cooking assistant robots
+2. **Living room**: For companion and eldercare robots
+3. **Warehouse**: For logistics and picking robots
+4. **Hospital**: For medical delivery robots
+5. **Office**: For telepresence and service robots
+
+Import these environments, place your URDF robot in them, and you have a realistic testing ground for HRI research.
+
+## Synthetic Data Generation
+
+### Unity Perception Package
+
+Unity's Perception package generates labeled training data for computer vision:
+
+```bash
+# Add to Unity via Package Manager (git URL):
+https://github.com/Unity-Technologies/com.unity.perception.git
+```
+
+The Perception package can generate:
+
+- **Bounding boxes** (2D and 3D)
+- **Semantic segmentation** masks
+- **Instance segmentation** masks
+- **Depth images**
+- **Surface normals**
+- **Keypoint annotations**
+
+### Setting Up Perception for Robot Vision
+
+```csharp
+using UnityEngine;
+using UnityEngine.Perception.GroundTruth;
+
+/// <summary>
+/// Configure the Perception Camera for generating labeled datasets.
+/// </summary>
+public class PerceptionSetup : MonoBehaviour
+{
+    void Start()
+    {
+        // The PerceptionCamera component is added in the Unity Editor.
+        // It automatically generates labels for each frame.
+
+        // Randomize object positions for diverse training data
+        var objects = GameObject.FindGameObjectsWithTag("Interactable");
+        foreach (var obj in objects)
+        {
+            obj.transform.position += new Vector3(
+                Random.Range(-0.1f, 0.1f),
+                0,
+                Random.Range(-0.1f, 0.1f)
+            );
+        }
+    }
+}
+```
+
+### Domain Randomization
+
+To make trained models robust to real-world variation, randomize:
+
+- **Lighting**: Direction, color, intensity
+- **Materials**: Texture, color, reflectivity of objects
+- **Camera pose**: Small random perturbations to viewing angle
+- **Object placement**: Random positions within plausible ranges
+- **Distractors**: Random background objects
+
+```csharp
+using UnityEngine;
+
+/// <summary>
+/// Randomizes scene parameters each frame for domain randomization.
+/// </summary>
+public class DomainRandomizer : MonoBehaviour
+{
+    [SerializeField] private Light mainLight;
+    [SerializeField] private Material[] floorMaterials;
+    [SerializeField] private Transform[] objectsToRandomize;
+
+    private int frameCount = 0;
+    [SerializeField] private int randomizeEveryNFrames = 10;
+
+    void Update()
+    {
+        frameCount++;
+        if (frameCount % randomizeEveryNFrames != 0) return;
+
+        // Randomize lighting
+        mainLight.intensity = Random.Range(0.5f, 2.0f);
+        mainLight.color = Color.Lerp(Color.white,
+            new Color(1f, 0.95f, 0.8f), Random.value);
+        mainLight.transform.rotation = Quaternion.Euler(
+            Random.Range(30f, 70f),
+            Random.Range(0f, 360f),
+            0
+        );
+
+        // Randomize floor material
+        if (floorMaterials.Length > 0)
+        {
+            var floor = GameObject.Find("Floor");
+            if (floor != null)
+            {
+                floor.GetComponent<Renderer>().material =
+                    floorMaterials[Random.Range(0, floorMaterials.Length)];
+            }
+        }
+
+        // Randomize object positions slightly
+        foreach (var obj in objectsToRandomize)
+        {
+            obj.position += new Vector3(
+                Random.Range(-0.05f, 0.05f),
+                0,
+                Random.Range(-0.05f, 0.05f)
+            );
+        }
+    }
+}
+```
+
+## Gazebo vs. Unity: Choosing the Right Tool
+
+### Decision Framework
+
+| Question | Choose Gazebo | Choose Unity |
+|----------|--------------|--------------|
+| Need accurate contact physics? | Yes | No |
+| Need photorealistic images? | No | Yes |
+| Training RL policies? | Yes (fast headless sim) | Sometimes (slower) |
+| Designing HRI? | No | Yes |
+| Generating CV training data? | Sometimes | Yes |
+| Need ROS 2 integration? | Yes (native) | Yes (via TCP bridge) |
+| Running on a server cluster? | Yes (Linux, headless) | Harder (needs GPU, display) |
+| Demonstrating to stakeholders? | Sometimes | Yes (prettier) |
+
+### Hybrid Workflow (Best Practice)
+
+Many professional teams use both:
+
+```
+┌──────────────────┐     ┌──────────────────┐
+│    Gazebo         │     │    Unity          │
+│  - Physics sim    │     │  - Visualization  │
+│  - Sensor noise   │────>│  - Synthetic data │
+│  - RL training    │     │  - HRI design     │
+│  - Fast headless  │     │  - Demos          │
+└──────────────────┘     └──────────────────┘
+         │                         │
+         └─────────┬───────────────┘
+                   │
+            ┌──────┴──────┐
+            │   ROS 2     │
+            │  (central   │
+            │   hub)      │
+            └─────────────┘
+```
+
+1. **Gazebo** runs the physics simulation and produces sensor data with accurate noise models
+2. **ROS 2** processes sensor data, runs perception and control algorithms
+3. **Unity** provides a real-time 3D visualization of the robot and its environment, and generates synthetic training data when needed
+
+The two simulators communicate through ROS 2, which acts as the central message bus.
+
+## Running Gazebo and Unity Together
+
+### Architecture
+
+```bash
+# Terminal 1: Gazebo (physics + sensors)
+gz sim humanoid_world.sdf
+
+# Terminal 2: ROS-Gazebo bridge
+ros2 run ros_gz_bridge parameter_bridge --ros-args -p config_file:=bridge.yaml
+
+# Terminal 3: ROS-TCP-Endpoint (for Unity)
+ros2 run ros_tcp_endpoint default_server_endpoint \
+  --ros-args -p ROS_IP:=0.0.0.0 -p ROS_TCP_PORT:=10000
+
+# Terminal 4: Unity (open the project and press Play)
+# Unity subscribes to /joint_states and /camera/image_raw
+# Unity publishes /unity/user_commands for HRI interaction
+```
+
+### Data Flow
+
+1. Gazebo publishes joint states and sensor data via gz-transport
+2. The ros_gz_bridge converts them to ROS 2 topics
+3. Your control nodes process the data and publish commands
+4. The ros_gz_bridge sends commands back to Gazebo
+5. Simultaneously, Unity receives joint states via ROS-TCP-Endpoint
+6. Unity renders the robot in its current pose within a photorealistic environment
+
+## Summary
+
+In this chapter, you learned:
+
+- **Why Unity for robotics**: Photorealistic rendering, HRI design, synthetic data generation
+- **Unity setup**: Installing the editor, Robotics Hub packages, and URDF Importer
+- **URDF import**: Bringing robot models into Unity with proper physics and visuals
+- **ROS-TCP-Connector**: Bidirectional communication between Unity and ROS 2
+- **Coordinate frames**: Converting between Unity's left-handed Y-up and ROS's right-handed Z-up
+- **HRI scenarios**: Building human-robot interaction sequences in Unity
+- **Synthetic data**: Using the Perception package and domain randomization for CV training data
+- **Gazebo vs. Unity**: When to use each, and how to use both together
+- **Hybrid workflow**: Running Gazebo for physics and Unity for visualization via ROS 2
+
+## Exercises
+
+### Exercise 1: Unity Setup and URDF Import
+1. Install Unity 2022.3 LTS and create a new 3D URP project
+2. Install the ROS-TCP-Connector and URDF Importer packages
+3. Import the simple arm URDF from Chapter 2 into Unity
+4. Add a ground plane and directional light
+5. Take a screenshot comparing the robot's appearance in Gazebo vs. Unity
+
+### Exercise 2: ROS 2 Communication
+1. Launch the ROS-TCP-Endpoint node
+2. Configure Unity's ROS Settings to connect
+3. Create a Unity script that subscribes to `/joint_states`
+4. Verify that the robot in Unity moves when you publish joint commands in ROS 2:
+```bash
+ros2 topic pub /joint_states sensor_msgs/msg/JointState \
+  "{name: ['shoulder_joint'], position: [0.5]}" --once
+```
+
+### Exercise 3: Enhanced Visualization
+1. Import a free interior environment from the Unity Asset Store (e.g., a kitchen or living room)
+2. Place your robot model in the environment
+3. Set up a camera that follows the robot
+4. Add post-processing effects (ambient occlusion, bloom)
+5. Compare a screenshot from this Unity scene with the same robot in Gazebo
+
+### Exercise 4: Simple HRI Scenario
+Design a scenario where:
+1. A humanoid robot stands in a room
+2. A human character (use a simple capsule or free character model) enters the room
+3. The robot turns to face the human
+4. The robot waves (animate a joint through a preset trajectory)
+5. Log the interaction to a ROS 2 topic
+
+### Exercise 5: Comparison Report
+Write a one-page comparison of Gazebo and Unity based on your experience in this module:
+1. Which tool was easier to set up?
+2. Which produced more realistic visuals?
+3. Which felt more responsive for physics testing?
+4. In what scenario would you choose Gazebo over Unity, and vice versa?
+5. How would you architect a project that uses both?
+
+---
+
+**Module 2 Complete.** You now have the skills to build digital twins of humanoid robots using both Gazebo and Unity. In **Module 3**, you will use these simulated environments to develop perception algorithms -- processing the sensor data you learned to generate in this module.

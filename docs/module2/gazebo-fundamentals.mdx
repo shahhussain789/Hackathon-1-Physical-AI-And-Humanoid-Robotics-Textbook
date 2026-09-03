@@ -1,0 +1,613 @@
+---
+title: Gazebo Simulation Fundamentals
+sidebar_label: Gazebo Fundamentals
+sidebar_position: 1
+description: Learn what Gazebo is, how its physics engines work, and how to create your first simulation world with gravity, friction, and collisions.
+keywords: [gazebo, physics simulation, ODE, bullet, DART, world file, simulation, gazebo harmonic]
+tags: [module2, gazebo, simulation, physics]
+---
+
+# Gazebo Simulation Fundamentals
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Explain why physics simulation is essential for robotics development
+- Describe Gazebo's architecture and the differences between Gazebo Classic and Gazebo Harmonic
+- Install and configure Gazebo on Ubuntu 22.04
+- Create world files that define environments with objects, lighting, and physics
+- Understand how physics engines (ODE, Bullet, DART) simulate gravity, friction, and collisions
+- Configure physics parameters to balance accuracy and performance
+
+## Why Simulation Matters
+
+### The Cost of Real-World Testing
+
+Consider the development cycle without simulation:
+
+1. Write a walking algorithm
+2. Upload to a $50,000 humanoid robot
+3. Robot falls and breaks an actuator
+4. Wait 2 weeks for replacement parts
+5. Repeat
+
+Now consider the same cycle with simulation:
+
+1. Write a walking algorithm
+2. Test in Gazebo -- robot falls 10,000 times in 5 minutes
+3. Refine the algorithm until it works
+4. Deploy to real hardware with high confidence
+
+Simulation accelerates development by orders of magnitude. Teams at Boston Dynamics, Agility Robotics, and Tesla Optimus all rely heavily on simulation before real-world deployment.
+
+### What Makes a Good Robotics Simulator?
+
+A robotics simulator must provide:
+
+- **Rigid-body physics**: Accurate modeling of forces, torques, contacts, and constraints
+- **Sensor simulation**: Virtual cameras, LiDAR, IMUs that produce realistic data
+- **Actuator models**: Motors with realistic torque limits, friction, and backlash
+- **Environment modeling**: Terrain, objects, lighting, and atmospheric effects
+- **Real-time or faster**: Run at wall-clock speed or faster for large-scale testing
+- **API access**: Programmatic control for automated testing and reinforcement learning
+
+Gazebo delivers all of these.
+
+## What is Gazebo?
+
+Gazebo is an open-source 3D robotics simulator maintained by **Open Robotics** (now part of the **Intrinsic** division of Alphabet). It is the most widely used simulator in the ROS ecosystem and has been the default simulation tool for the DARPA Robotics Challenge, RoboCup, and numerous research projects.
+
+### Gazebo Classic vs. Gazebo Harmonic (Garden)
+
+There are two major versions of Gazebo you will encounter:
+
+| Feature | Gazebo Classic (11) | Gazebo Harmonic (Garden+) |
+|---------|---------------------|---------------------------|
+| Architecture | Monolithic | Modular (gz-sim, gz-physics, gz-rendering, ...) |
+| ROS 2 Support | Via gazebo_ros_pkgs | Via ros_gz bridge |
+| Physics Engines | ODE (default), Bullet | DART (default), TPE, Bullet |
+| Rendering | OGRE 1.x | OGRE 2.x (PBR, global illumination) |
+| Plugin API | C++ only | C++ (with improved APIs) |
+| Status | Maintenance only | Active development |
+
+:::warning Which Version to Use
+This textbook uses **Gazebo Harmonic** (the modern version) as the primary tool, with notes for Gazebo Classic where they differ. If you are following a ROS 2 Humble tutorial that references "Gazebo 11," that is Classic. The modern Gazebo uses the `gz` command-line tool instead of `gazebo`.
+:::
+
+### Gazebo Architecture
+
+Gazebo Harmonic has a modular architecture built from independent libraries:
+
+```
+gz-sim          # Core simulation loop and entity-component system
+gz-physics      # Physics engine abstraction layer
+gz-rendering    # 3D rendering (OGRE 2.x)
+gz-sensors      # Sensor models (camera, LiDAR, IMU, etc.)
+gz-transport    # Inter-process communication (Protobuf over ZeroMQ)
+gz-gui          # Qt-based GUI with dockable plugins
+gz-math         # Math primitives (vectors, quaternions, poses)
+gz-common       # Mesh loading, image processing, profiling
+```
+
+This modularity means you can swap physics engines without changing your simulation code, or run headless (no rendering) for faster batch testing.
+
+## Installing Gazebo
+
+### Option 1: Install Gazebo Harmonic on Ubuntu 22.04
+
+```bash
+# Add the Open Robotics repository
+sudo apt-get update
+sudo apt-get install -y lsb-release wget gnupg
+
+sudo wget https://packages.osrfoundation.org/gazebo.gpg \
+  -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
+  http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
+
+sudo apt-get update
+
+# Install Gazebo Harmonic
+sudo apt-get install -y gz-harmonic
+```
+
+### Option 2: Install with ROS 2 Humble
+
+If you already have ROS 2 Humble, install the ROS-Gazebo bridge:
+
+```bash
+sudo apt-get install -y ros-humble-ros-gz
+```
+
+This installs Gazebo Harmonic and the bridge packages together.
+
+### Verify Installation
+
+```bash
+# Check Gazebo version
+gz sim --version
+
+# Launch an empty world (should open the GUI)
+gz sim empty.sdf
+```
+
+You should see the Gazebo GUI with a ground plane and the sun. If it launches without errors, your installation is working.
+
+:::tip Headless Mode
+For servers or CI pipelines without a display, run Gazebo in headless mode:
+```bash
+gz sim -s empty.sdf   # Server only, no GUI
+```
+The `-s` flag runs only the physics server. You can connect a GUI client later from another machine.
+:::
+
+## Creating Your First World
+
+### World File Basics
+
+Gazebo worlds are described in **SDF (Simulation Description Format)**, an XML-based format. Here is a minimal world:
+
+```xml
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="my_first_world">
+
+    <!-- Physics configuration -->
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <!-- Sunlight -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A box sitting on the ground -->
+    <model name="box">
+      <pose>2 0 0.5 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.167</ixx><iyy>0.167</iyy><izz>0.167</izz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><box><size>1 1 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1 1 1</size></box></geometry>
+          <material>
+            <ambient>0.2 0.6 0.9 1</ambient>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
+```
+
+Save this as `my_first_world.sdf` and run it:
+
+```bash
+gz sim my_first_world.sdf
+```
+
+You should see a blue box sitting on a gray ground plane with directional lighting.
+
+### Understanding the World File Structure
+
+Every SDF world file follows this hierarchy:
+
+```
+<sdf>
+  <world>
+    <physics>       # Physics engine and step settings
+    <light>         # Light sources (directional, point, spot)
+    <model>         # Objects in the world
+      <static>      # If true, object cannot move
+      <link>        # A rigid body
+        <inertial>  # Mass and inertia tensor
+        <collision> # Shape used for physics contacts
+        <visual>    # Shape used for rendering
+        <sensor>    # Attached sensors (camera, lidar, etc.)
+    <plugin>        # Custom behavior (controllers, loggers)
+  </world>
+</sdf>
+```
+
+:::info Collision vs. Visual Geometry
+The **collision** geometry is what the physics engine uses for contact detection. The **visual** geometry is what gets rendered on screen. They can differ: you might use a simple box for collision (fast) but a detailed mesh for visual (pretty). This is a common optimization in robotics simulation.
+:::
+
+## Physics Engines
+
+Gazebo supports multiple physics engines, each with different strengths.
+
+### ODE (Open Dynamics Engine)
+
+- **Default in Gazebo Classic**
+- Fast and stable for most robotics scenarios
+- Good contact model for wheeled robots and manipulators
+- Less accurate for complex articulated bodies
+
+### Bullet
+
+- Developed for video games, adapted for robotics
+- Good performance with many contact points
+- Used extensively in PyBullet (a popular RL training tool)
+- Available in both Classic and Harmonic
+
+### DART (Dynamic Animation and Robotics Toolkit)
+
+- **Default in Gazebo Harmonic**
+- Designed specifically for robotics and biomechanics
+- Excellent support for articulated rigid bodies (humanoids)
+- More accurate joint constraint handling
+- Slightly slower than ODE for simple scenarios, but more physically accurate
+
+### Choosing a Physics Engine
+
+For humanoid robotics, **DART** is the recommended choice because:
+
+1. It handles articulated chains (arms, legs) with higher fidelity
+2. Its constraint solver is more robust for bipedal balance
+3. It supports soft contacts and compliant joints
+
+To specify the physics engine in your world file:
+
+```xml
+<!-- Using DART -->
+<physics name="dart_physics" type="dart">
+  <max_step_size>0.001</max_step_size>
+  <real_time_factor>1.0</real_time_factor>
+</physics>
+
+<!-- Using Bullet -->
+<physics name="bullet_physics" type="bullet">
+  <max_step_size>0.001</max_step_size>
+  <real_time_factor>1.0</real_time_factor>
+</physics>
+```
+
+## Simulating Gravity, Friction, and Collisions
+
+### Gravity
+
+By default, Gazebo simulates Earth's gravity at -9.81 m/s^2 in the Z direction. You can customize this:
+
+```xml
+<world name="moon_world">
+  <gravity>0 0 -1.62</gravity>  <!-- Moon gravity -->
+  <!-- ... -->
+</world>
+```
+
+```xml
+<world name="zero_g_world">
+  <gravity>0 0 0</gravity>  <!-- Space station -->
+  <!-- ... -->
+</world>
+```
+
+This is useful for testing robots destined for lunar or orbital environments.
+
+### Friction
+
+Friction is defined per-collision surface. The two key parameters are:
+
+- **mu** (mu1): Friction coefficient in the primary direction
+- **mu2**: Friction coefficient in the secondary direction
+
+```xml
+<collision name="collision">
+  <geometry><box><size>1 1 1</size></box></geometry>
+  <surface>
+    <friction>
+      <ode>
+        <mu>0.8</mu>       <!-- Rubber on concrete ~0.6-1.0 -->
+        <mu2>0.8</mu2>
+      </ode>
+    </friction>
+    <bounce>
+      <restitution_coefficient>0.0</restitution_coefficient>
+    </bounce>
+  </surface>
+</collision>
+```
+
+Common friction coefficient values:
+
+| Surface Pair | mu |
+|-------------|-----|
+| Rubber on concrete | 0.6 - 1.0 |
+| Metal on metal | 0.3 - 0.6 |
+| Robot foot (rubber) on tile | 0.4 - 0.8 |
+| Ice | 0.01 - 0.05 |
+
+### Collisions
+
+Gazebo uses a two-phase collision detection system:
+
+1. **Broad phase**: Axis-aligned bounding boxes (AABBs) quickly eliminate non-colliding pairs
+2. **Narrow phase**: Detailed geometry intersection tests for nearby objects
+
+You can observe collisions in real-time by enabling contact visualization in the Gazebo GUI (View > Contacts).
+
+### The Physics Step
+
+The simulation advances in discrete time steps. The `max_step_size` parameter controls the duration of each step:
+
+```xml
+<physics type="dart">
+  <max_step_size>0.001</max_step_size>    <!-- 1 ms per step -->
+  <real_time_update_rate>1000</real_time_update_rate>  <!-- 1000 steps/sec -->
+  <real_time_factor>1.0</real_time_factor> <!-- 1x real-time -->
+</physics>
+```
+
+:::warning Step Size Tradeoffs
+- **Smaller step size** (0.0001s): More accurate physics, especially for stiff contacts and fast motions. But the simulation runs slower.
+- **Larger step size** (0.01s): Faster simulation, but objects may penetrate each other or joints may become unstable.
+- **Recommended**: Start with 0.001s (1 ms). Reduce if you see instability; increase if you need speed for RL training.
+:::
+
+The `real_time_factor` controls how fast simulation time advances relative to wall-clock time:
+
+- `1.0`: Real-time (1 second of sim = 1 second of real time)
+- `0.0`: Run as fast as possible (useful for RL training)
+- `2.0`: Twice real-time (if your computer can keep up)
+
+## Building a More Complex World
+
+Let's create a world with multiple objects that demonstrates physics interactions:
+
+```xml
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="physics_playground">
+
+    <physics type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground with friction -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode><mu>1.0</mu><mu2>1.0</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A ramp for sliding experiments -->
+    <model name="ramp">
+      <static>true</static>
+      <pose>0 0 0.5 0 -0.3 0</pose>  <!-- Tilted 17 degrees -->
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>4 2 0.1</size></box></geometry>
+          <surface>
+            <friction>
+              <ode><mu>0.3</mu><mu2>0.3</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>4 2 0.1</size></box></geometry>
+          <material><ambient>0.6 0.4 0.2 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A sphere that will roll down the ramp -->
+    <model name="ball">
+      <pose>-1.5 0 1.5 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.5</mass>
+          <inertia>
+            <ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><sphere><radius>0.15</radius></sphere></geometry>
+          <surface>
+            <friction>
+              <ode><mu>0.5</mu><mu2>0.5</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><sphere><radius>0.15</radius></sphere></geometry>
+          <material><ambient>0.9 0.2 0.2 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A stack of boxes that can be knocked over -->
+    <model name="box_bottom">
+      <pose>3 0 0.25 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>2.0</mass>
+          <inertia><ixx>0.083</ixx><iyy>0.083</iyy><izz>0.083</izz></inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+          <material><ambient>0.2 0.8 0.2 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_top">
+      <pose>3 0 0.75 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.5</mass>
+          <inertia><ixx>0.021</ixx><iyy>0.021</iyy><izz>0.021</izz></inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+          <material><ambient>0.2 0.2 0.8 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
+```
+
+Run this world and observe:
+- The ball rolls down the ramp due to gravity and friction
+- The stacked boxes maintain balance (or topple if disturbed)
+- Objects interact through contact forces
+
+## Gazebo GUI Overview
+
+When you launch Gazebo, the GUI provides several key panels:
+
+- **3D Scene**: The main viewport showing your world. Use mouse to orbit (middle-click drag), pan (shift + middle-click), and zoom (scroll)
+- **Entity Tree**: Lists all models, links, and joints in the world
+- **Component Inspector**: Shows properties of the selected entity (pose, mass, etc.)
+- **Playback Controls**: Play, pause, step, and reset the simulation
+- **Plugin Menu**: Add visualization plugins (contact forces, joint positions, etc.)
+
+### Useful Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Space | Play/Pause simulation |
+| Right Arrow | Step forward one physics step |
+| T | Translation mode (move objects) |
+| R | Rotation mode (rotate objects) |
+| Esc | Deselect / cancel current action |
+
+## Gazebo Command-Line Tools
+
+Gazebo Harmonic provides powerful CLI tools:
+
+```bash
+# List available worlds
+gz sim --list
+
+# Run a specific world
+gz sim path/to/world.sdf
+
+# Run headless (server only)
+gz sim -s path/to/world.sdf
+
+# Interact with a running simulation
+gz topic --list               # List all topics
+gz topic --echo --topic /world/default/pose/info  # Print pose data
+gz service --list             # List all services
+gz model --list               # List models in the running sim
+gz model --model box --pose   # Get pose of 'box' model
+```
+
+These CLI tools use `gz-transport` (ZeroMQ + Protobuf) under the hood -- the same transport layer that the GUI and plugins use.
+
+## Summary
+
+In this chapter, you learned:
+
+- **Why simulation is essential**: Faster development, safer testing, lower cost
+- **Gazebo's architecture**: Modular libraries (gz-sim, gz-physics, gz-rendering, etc.)
+- **Classic vs. Harmonic**: Harmonic is the modern, actively developed version
+- **World files**: SDF-based XML describing physics, lights, and models
+- **Physics engines**: ODE (fast), Bullet (game-oriented), DART (best for humanoids)
+- **Physics parameters**: Gravity, friction, collisions, step size, real-time factor
+
+## Exercises
+
+### Exercise 1: Install and Verify
+Install Gazebo Harmonic on your system and verify the installation by running `gz sim empty.sdf`. Take a screenshot of the GUI.
+
+### Exercise 2: Custom World
+Create a world file called `obstacle_course.sdf` that includes:
+- A ground plane with high friction (mu = 1.0)
+- At least 3 different primitive shapes (box, sphere, cylinder)
+- Objects at different heights so some will fall when simulation starts
+- A static wall that objects can collide with
+
+### Exercise 3: Physics Experiments
+Using the `physics_playground.sdf` from this chapter:
+1. Change the ball's mass to 5.0 kg. How does its behavior on the ramp change?
+2. Set the ramp's friction to 0.01 (icy). What happens to the ball?
+3. Change gravity to Moon gravity (-1.62). Observe the differences.
+4. Set `max_step_size` to 0.01 (10x larger). Do you notice any instability?
+
+### Exercise 4: Real-Time Factor
+Create a world with 20 falling boxes. Run it at `real_time_factor` 1.0 and then 0.0 (max speed). Compare the wall-clock time to simulate 10 seconds of physics in each case. What does this tell you about your computer's simulation throughput?
+
+### Exercise 5: CLI Exploration
+With a simulation running, use the `gz` command-line tools to:
+1. List all topics being published
+2. Echo the pose of a specific model
+3. List all services available
+4. Find the topic that publishes contact/collision data
+
+---
+
+**Next Chapter**: [Robot Models: URDF & SDF](./urdf-sdf-models) -- Build the virtual body of your robot.

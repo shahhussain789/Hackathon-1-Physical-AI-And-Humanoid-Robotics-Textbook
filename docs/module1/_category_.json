@@ -1,5 +1,5 @@
 {
-  "label": "Module 1: Introduction to Physical AI",
+  "label": "Module 1: The Robotic Nervous System (ROS 2)",
   "position": 2,
   "collapsed": false,
   "link": {
@@ -7,15 +7,15 @@
     "id": "module1/index"
   },
   "customProps": {
-    "description": "Foundations of Physical AI and embodied intelligence - bridging digital AI with the physical world",
-    "estimatedHours": 12,
-    "prerequisites": ["Basic AI/ML concepts", "Python programming", "Familiarity with neural networks"],
+    "description": "Middleware for robot control — ROS 2 architecture, nodes, topics, services, Python integration, and URDF for humanoid robots",
+    "estimatedHours": 16,
+    "prerequisites": ["Basic AI/ML concepts", "Python programming", "Linux command-line familiarity"],
     "learningObjectives": [
-      "Define Physical AI and contrast it with traditional digital AI",
-      "Explain embodied intelligence and the role of physical constraints",
-      "Identify key challenges in real-world robotics deployment",
-      "Survey humanoid robot applications and use cases",
-      "Understand the tools ecosystem: ROS 2, Gazebo, NVIDIA Isaac"
+      "Understand Physical AI foundations and the humanoid robotics landscape",
+      "Master ROS 2 architecture including DDS middleware and QoS policies",
+      "Implement publisher/subscriber, service, and action patterns",
+      "Build ROS 2 packages with Python using rclpy",
+      "Create and visualize URDF models for humanoid robots"
     ]
   }
 }

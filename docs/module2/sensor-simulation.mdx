@@ -1,0 +1,720 @@
+---
+title: Simulating Sensors
+sidebar_label: Sensor Simulation
+sidebar_position: 3
+description: Learn to simulate LiDAR, depth cameras, IMUs, and camera sensors in Gazebo with realistic noise models and ROS 2 integration for Physical AI development.
+keywords: [sensor simulation, LiDAR, depth camera, IMU, RGB-D, gazebo sensors, sensor plugins, noise model]
+tags: [module2, sensors, lidar, camera, imu, simulation]
+---
+
+# Simulating Sensors: LiDAR, Depth Cameras, and IMUs
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Explain why sensor simulation is critical for Physical AI development
+- Configure and simulate 2D and 3D LiDAR sensors in Gazebo
+- Set up RGB-D (depth camera) sensors with realistic parameters
+- Simulate IMU sensors for orientation and acceleration measurement
+- Add standard camera sensors with configurable resolution and field of view
+- Implement sensor noise models that approximate real-world sensor behavior
+- Use Gazebo sensor plugins to publish data to the simulation transport layer
+
+## Why Simulate Sensors?
+
+A robot without sensors is blind. In Physical AI, sensors are how the robot perceives the world -- they are the input pipeline for every perception, navigation, and manipulation algorithm.
+
+Simulating sensors serves three purposes:
+
+1. **Algorithm development**: Develop and debug perception algorithms without needing real hardware
+2. **Synthetic data generation**: Generate labeled training data for computer vision and ML models (the ground truth is always known in simulation)
+3. **Sim-to-real validation**: Verify that your perception pipeline works before deploying to a physical robot
+
+:::info The Sim-to-Real Gap
+Simulated sensors are approximations. Real cameras have lens distortion, rolling shutter artifacts, and auto-exposure. Real LiDAR has beam divergence and multi-path reflections. Noise models help bridge this gap, but always validate on real hardware before production deployment.
+:::
+
+## Sensor Fundamentals in Gazebo
+
+### How Gazebo Sensors Work
+
+In Gazebo, sensors are attached to **links** in your robot model. Each sensor has:
+
+- A **type** (camera, lidar, imu, etc.)
+- A **pose** relative to the parent link
+- **Parameters** specific to the sensor type (resolution, range, FOV)
+- An optional **noise model**
+- An **update rate** (how often the sensor produces data)
+
+The `gz-sensors` library computes sensor outputs each update cycle and publishes them via `gz-transport` topics.
+
+### General Sensor SDF Structure
+
+```xml
+<link name="sensor_link">
+  <sensor name="my_sensor" type="camera">
+    <pose>0 0 0.1 0 0 0</pose>
+    <update_rate>30</update_rate>
+    <always_on>true</always_on>
+    <visualize>true</visualize>
+    <!-- Sensor-specific parameters -->
+    <camera>
+      <!-- ... -->
+    </camera>
+  </sensor>
+</link>
+```
+
+## LiDAR Simulation
+
+### What is LiDAR?
+
+LiDAR (Light Detection and Ranging) uses laser pulses to measure distances. It produces a **point cloud** -- a set of 3D points representing the surfaces of objects around the sensor.
+
+### 2D LiDAR (Planar Scanner)
+
+A 2D LiDAR scans in a single plane, producing a ring of distance measurements. Common in mobile robots for navigation and obstacle avoidance.
+
+```xml
+<link name="lidar_link">
+  <pose>0 0 0.3 0 0 0</pose>
+  <sensor name="lidar_2d" type="gpu_lidar">
+    <pose>0 0 0 0 0 0</pose>
+    <update_rate>10</update_rate>
+    <always_on>true</always_on>
+    <visualize>true</visualize>
+    <ray>
+      <scan>
+        <horizontal>
+          <samples>360</samples>
+          <resolution>1.0</resolution>
+          <min_angle>-3.14159</min_angle>
+          <max_angle>3.14159</max_angle>
+        </horizontal>
+        <vertical>
+          <samples>1</samples>
+          <resolution>1.0</resolution>
+          <min_angle>0</min_angle>
+          <max_angle>0</max_angle>
+        </vertical>
+      </scan>
+      <range>
+        <min>0.1</min>
+        <max>30.0</max>
+        <resolution>0.01</resolution>
+      </range>
+      <noise>
+        <type>gaussian</type>
+        <mean>0.0</mean>
+        <stddev>0.01</stddev>
+      </noise>
+    </ray>
+  </sensor>
+</link>
+```
+
+Key parameters explained:
+
+- **`samples`**: Number of laser beams per scan (360 = 1 degree resolution)
+- **`min_angle` / `max_angle`**: Scan range in radians (-pi to pi = full 360 degrees)
+- **`min` / `max` range**: Measurement distance bounds in meters
+- **`noise`**: Gaussian noise with mean 0 and standard deviation 0.01 meters (1 cm)
+
+### 3D LiDAR (Multi-beam Scanner)
+
+A 3D LiDAR like the Velodyne VLP-16 uses multiple vertically stacked beams to produce a 3D point cloud:
+
+```xml
+<sensor name="lidar_3d" type="gpu_lidar">
+  <pose>0 0 0.5 0 0 0</pose>
+  <update_rate>10</update_rate>
+  <always_on>true</always_on>
+  <visualize>true</visualize>
+  <ray>
+    <scan>
+      <horizontal>
+        <samples>1800</samples>       <!-- 0.2 degree horizontal resolution -->
+        <resolution>1.0</resolution>
+        <min_angle>-3.14159</min_angle>
+        <max_angle>3.14159</max_angle>
+      </horizontal>
+      <vertical>
+        <samples>16</samples>          <!-- 16 vertical beams (VLP-16) -->
+        <resolution>1.0</resolution>
+        <min_angle>-0.2618</min_angle> <!-- -15 degrees -->
+        <max_angle>0.2618</max_angle>  <!--  15 degrees -->
+      </vertical>
+    </scan>
+    <range>
+      <min>0.3</min>
+      <max>100.0</max>
+      <resolution>0.003</resolution>   <!-- 3mm range resolution -->
+    </range>
+    <noise>
+      <type>gaussian</type>
+      <mean>0.0</mean>
+      <stddev>0.02</stddev>            <!-- 2cm noise -->
+    </noise>
+  </ray>
+</sensor>
+```
+
+:::tip GPU vs CPU LiDAR
+Use `type="gpu_lidar"` whenever possible. GPU-based ray casting is orders of magnitude faster than CPU-based, especially for 3D LiDAR with thousands of beams. This requires a GPU with OpenGL support.
+:::
+
+### Common LiDAR Models to Simulate
+
+| LiDAR | Beams | Range | Horizontal FOV | Update Rate |
+|-------|-------|-------|-----------------|-------------|
+| Hokuyo UTM-30LX | 1 (2D) | 30m | 270 deg | 40 Hz |
+| SICK TiM571 | 1 (2D) | 25m | 270 deg | 15 Hz |
+| Velodyne VLP-16 | 16 | 100m | 360 deg | 10-20 Hz |
+| Ouster OS1-64 | 64 | 120m | 360 deg | 10-20 Hz |
+
+## Depth Camera (RGB-D) Simulation
+
+### What is a Depth Camera?
+
+A depth camera produces two synchronized outputs:
+
+1. **RGB image**: Standard color image
+2. **Depth image**: Per-pixel distance to the nearest surface
+
+Common depth cameras include the Intel RealSense D435 and Microsoft Azure Kinect.
+
+### Configuring a Depth Camera
+
+```xml
+<link name="camera_link">
+  <pose>0 0 0.4 0 0 0</pose>
+  <sensor name="rgbd_camera" type="rgbd_camera">
+    <pose>0 0 0 0 0 0</pose>
+    <update_rate>30</update_rate>
+    <always_on>true</always_on>
+    <camera>
+      <horizontal_fov>1.2112</horizontal_fov>  <!-- ~69 degrees (RealSense D435) -->
+      <image>
+        <width>640</width>
+        <height>480</height>
+        <format>R8G8B8</format>
+      </image>
+      <clip>
+        <near>0.1</near>
+        <far>10.0</far>
+      </clip>
+      <depth_camera>
+        <clip>
+          <near>0.1</near>
+          <far>10.0</far>
+        </clip>
+      </depth_camera>
+      <noise>
+        <type>gaussian</type>
+        <mean>0.0</mean>
+        <stddev>0.007</stddev>
+      </noise>
+    </camera>
+  </sensor>
+</link>
+```
+
+### Depth Camera Output
+
+The depth camera publishes several data streams:
+
+- **`/camera/image`**: RGB color image
+- **`/camera/depth_image`**: 32-bit float depth image (meters per pixel)
+- **`/camera/points`**: 3D point cloud (combined RGB + depth)
+- **`/camera/camera_info`**: Camera intrinsic parameters (focal length, principal point)
+
+### Simulating the Intel RealSense D435
+
+To match the real D435 specifications:
+
+```xml
+<camera>
+  <!-- D435 RGB camera specs -->
+  <horizontal_fov>1.2112</horizontal_fov>  <!-- 69.4 degrees -->
+  <image>
+    <width>1280</width>
+    <height>720</height>
+    <format>R8G8B8</format>
+  </image>
+  <clip>
+    <near>0.105</near>   <!-- D435 minimum depth: 10.5 cm -->
+    <far>10.0</far>       <!-- Useful range ~10m -->
+  </clip>
+  <depth_camera>
+    <clip>
+      <near>0.105</near>
+      <far>10.0</far>
+    </clip>
+  </depth_camera>
+</camera>
+```
+
+## IMU (Inertial Measurement Unit) Simulation
+
+### What is an IMU?
+
+An IMU measures:
+
+- **Linear acceleration** (accelerometer) -- in m/s^2
+- **Angular velocity** (gyroscope) -- in rad/s
+- Some IMUs also include a **magnetometer** (compass)
+
+IMUs are critical for humanoid balance: they tell the robot which way is up and how fast it is rotating.
+
+### Configuring an IMU
+
+```xml
+<link name="imu_link">
+  <pose>0 0 0.5 0 0 0</pose>  <!-- Mounted on torso -->
+  <sensor name="imu_sensor" type="imu">
+    <pose>0 0 0 0 0 0</pose>
+    <update_rate>200</update_rate>   <!-- 200 Hz typical for robotics IMUs -->
+    <always_on>true</always_on>
+    <imu>
+      <angular_velocity>
+        <x>
+          <noise type="gaussian">
+            <mean>0.0</mean>
+            <stddev>0.0002</stddev>   <!-- rad/s -->
+            <bias_mean>0.0000075</bias_mean>
+            <bias_stddev>0.0000008</bias_stddev>
+          </noise>
+        </x>
+        <y>
+          <noise type="gaussian">
+            <mean>0.0</mean>
+            <stddev>0.0002</stddev>
+            <bias_mean>0.0000075</bias_mean>
+            <bias_stddev>0.0000008</bias_stddev>
+          </noise>
+        </y>
+        <z>
+          <noise type="gaussian">
+            <mean>0.0</mean>
+            <stddev>0.0002</stddev>
+            <bias_mean>0.0000075</bias_mean>
+            <bias_stddev>0.0000008</bias_stddev>
+          </noise>
+        </z>
+      </angular_velocity>
+      <linear_acceleration>
+        <x>
+          <noise type="gaussian">
+            <mean>0.0</mean>
+            <stddev>0.017</stddev>    <!-- m/s^2 -->
+            <bias_mean>0.1</bias_mean>
+            <bias_stddev>0.001</bias_stddev>
+          </noise>
+        </x>
+        <y>
+          <noise type="gaussian">
+            <mean>0.0</mean>
+            <stddev>0.017</stddev>
+            <bias_mean>0.1</bias_mean>
+            <bias_stddev>0.001</bias_stddev>
+          </noise>
+        </y>
+        <z>
+          <noise type="gaussian">
+            <mean>0.0</mean>
+            <stddev>0.017</stddev>
+            <bias_mean>0.1</bias_mean>
+            <bias_stddev>0.001</bias_stddev>
+          </noise>
+        </z>
+      </linear_acceleration>
+    </imu>
+  </sensor>
+</link>
+```
+
+### IMU Noise Parameters Explained
+
+Real IMU sensors exhibit two types of noise:
+
+1. **White noise** (`stddev`): Random fluctuations each measurement cycle
+2. **Bias** (`bias_mean`, `bias_stddev`): A slowly drifting offset that accumulates over time
+
+| Parameter | Typical Value | Unit |
+|-----------|--------------|------|
+| Gyro noise density | 0.0002 | rad/s/sqrt(Hz) |
+| Gyro random walk | 0.0000075 | rad/s^2/sqrt(Hz) |
+| Accel noise density | 0.017 | m/s^2/sqrt(Hz) |
+| Accel random walk | 0.001 | m/s^3/sqrt(Hz) |
+
+These values approximate a mid-range MEMS IMU (like the Bosch BMI088 used in many drones and robots).
+
+:::warning IMU Bias Drift
+In the real world, IMU bias drifts over time. If you integrate angular velocity to estimate orientation, this drift accumulates and your estimate diverges. This is why real robots use sensor fusion (IMU + visual odometry + external references). Simulating bias helps you develop and test these fusion algorithms.
+:::
+
+## Standard Camera Sensors
+
+### Basic RGB Camera
+
+```xml
+<sensor name="camera" type="camera">
+  <pose>0 0 0.5 0 0 0</pose>
+  <update_rate>30</update_rate>
+  <always_on>true</always_on>
+  <visualize>true</visualize>
+  <camera>
+    <horizontal_fov>1.3962634</horizontal_fov>  <!-- 80 degrees -->
+    <image>
+      <width>1920</width>
+      <height>1080</height>
+      <format>R8G8B8</format>
+    </image>
+    <clip>
+      <near>0.02</near>
+      <far>300</far>
+    </clip>
+    <lens>
+      <intrinsics>
+        <fx>1108.5</fx>
+        <fy>1108.5</fy>
+        <cx>960.0</cx>
+        <cy>540.0</cy>
+        <s>0</s>
+      </intrinsics>
+    </lens>
+    <noise>
+      <type>gaussian</type>
+      <mean>0.0</mean>
+      <stddev>0.007</stddev>
+    </noise>
+  </camera>
+</sensor>
+```
+
+### Camera Intrinsics
+
+The `<intrinsics>` section defines the camera's internal parameters:
+
+- **fx, fy**: Focal length in pixels
+- **cx, cy**: Principal point (usually image center)
+- **s**: Skew coefficient (usually 0)
+
+These parameters are essential for 3D reconstruction and computer vision algorithms. In simulation, you control them exactly -- in the real world, you must calibrate to determine them.
+
+### Relationship Between FOV and Focal Length
+
+The horizontal field of view and focal length are related by:
+
+```python
+import math
+
+width = 1920  # pixels
+hfov = 1.3962634  # radians (80 degrees)
+
+# Compute focal length from FOV and image width
+fx = width / (2.0 * math.tan(hfov / 2.0))
+print(f"Focal length: {fx:.1f} pixels")
+# Output: Focal length: 1108.5 pixels
+```
+
+## Sensor Noise Models
+
+### Why Add Noise?
+
+Perfect sensors do not exist. If you develop algorithms with perfect sensor data in simulation, they will fail on real hardware. Noise models bridge the sim-to-real gap.
+
+### Gaussian Noise
+
+The most common noise model. Each measurement has random noise added:
+
+```
+measurement = true_value + N(mean, stddev)
+```
+
+```xml
+<noise>
+  <type>gaussian</type>
+  <mean>0.0</mean>
+  <stddev>0.01</stddev>
+</noise>
+```
+
+### Depth-Dependent Noise
+
+Real depth cameras have noise that increases with distance. While Gazebo does not natively support this, you can approximate it with a custom sensor plugin or post-process the depth image:
+
+```python
+"""Add realistic depth-dependent noise to a simulated depth image."""
+
+import numpy as np
+
+
+def add_depth_noise(depth_image: np.ndarray, base_noise: float = 0.001,
+                    depth_factor: float = 0.005) -> np.ndarray:
+    """Add noise that scales with depth.
+    
+    Args:
+        depth_image: HxW array of depth values in meters.
+        base_noise: Baseline noise standard deviation (meters).
+        depth_factor: Noise scaling factor per meter of depth.
+    
+    Returns:
+        Noisy depth image.
+    """
+    noise_std = base_noise + depth_factor * depth_image
+    noise = np.random.normal(0, noise_std)
+    noisy_depth = depth_image + noise
+    
+    # Clamp to valid range
+    noisy_depth = np.clip(noisy_depth, 0.1, 10.0)
+    return noisy_depth
+```
+
+### Noise Model Comparison
+
+| Sensor | Noise Type | Typical Magnitude |
+|--------|-----------|-------------------|
+| 2D LiDAR | Gaussian range noise | 1-3 cm stddev |
+| 3D LiDAR | Gaussian range noise | 2-5 cm stddev |
+| Depth camera | Depth-dependent | 0.1% of range |
+| IMU (gyro) | Gaussian + bias | 0.0002 rad/s + drift |
+| IMU (accel) | Gaussian + bias | 0.017 m/s^2 + drift |
+| RGB camera | Gaussian pixel noise | 0.5-2% of pixel value |
+
+## Complete Sensor-Equipped Robot Model
+
+Here is an SDF model that attaches all the sensors we have discussed to a simple robot base:
+
+```xml
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <model name="sensor_bot">
+
+    <!-- Robot base -->
+    <link name="base_link">
+      <inertial>
+        <mass>10.0</mass>
+        <inertia>
+          <ixx>0.167</ixx><iyy>0.167</iyy><izz>0.167</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>0.5 0.3 0.2</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.5 0.3 0.2</size></box></geometry>
+        <material><ambient>0.3 0.3 0.3 1</ambient></material>
+      </visual>
+
+      <!-- IMU on the base -->
+      <sensor name="imu" type="imu">
+        <update_rate>200</update_rate>
+        <always_on>true</always_on>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0</mean>
+              <stddev>0.0002</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean>
+              <stddev>0.0002</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean>
+              <stddev>0.0002</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0</mean>
+              <stddev>0.017</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean>
+              <stddev>0.017</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean>
+              <stddev>0.017</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </link>
+
+    <!-- LiDAR tower -->
+    <link name="lidar_link">
+      <pose>0 0 0.2 0 0 0</pose>
+      <inertial>
+        <mass>0.5</mass>
+        <inertia>
+          <ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz>
+        </inertia>
+      </inertial>
+      <visual name="visual">
+        <geometry><cylinder><radius>0.03</radius>
+          <length>0.05</length></cylinder></geometry>
+        <material><ambient>0.1 0.1 0.1 1</ambient></material>
+      </visual>
+
+      <sensor name="lidar" type="gpu_lidar">
+        <update_rate>10</update_rate>
+        <always_on>true</always_on>
+        <visualize>true</visualize>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>360</samples>
+              <resolution>1.0</resolution>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.1</min><max>30.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0</mean><stddev>0.01</stddev>
+          </noise>
+        </ray>
+      </sensor>
+    </link>
+
+    <joint name="lidar_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>lidar_link</child>
+    </joint>
+
+    <!-- Camera mount -->
+    <link name="camera_link">
+      <pose>0.2 0 0.15 0 0 0</pose>
+      <inertial>
+        <mass>0.1</mass>
+        <inertia>
+          <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
+        </inertia>
+      </inertial>
+      <visual name="visual">
+        <geometry><box><size>0.03 0.06 0.03</size></box></geometry>
+        <material><ambient>0.1 0.1 0.1 1</ambient></material>
+      </visual>
+
+      <sensor name="rgbd" type="rgbd_camera">
+        <update_rate>30</update_rate>
+        <always_on>true</always_on>
+        <camera>
+          <horizontal_fov>1.2112</horizontal_fov>
+          <image>
+            <width>640</width><height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip><near>0.1</near><far>10.0</far></clip>
+          <depth_camera>
+            <clip><near>0.1</near><far>10.0</far></clip>
+          </depth_camera>
+          <noise>
+            <type>gaussian</type>
+            <mean>0</mean><stddev>0.007</stddev>
+          </noise>
+        </camera>
+      </sensor>
+    </link>
+
+    <joint name="camera_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>camera_link</child>
+    </joint>
+
+  </model>
+</sdf>
+```
+
+## Viewing Sensor Data
+
+### In the Gazebo GUI
+
+1. Click the hamburger menu (top-right)
+2. Select **Image Display** plugin for camera feeds
+3. Select **Visualize Lidar** to see LiDAR rays in the 3D scene
+4. Use the **Topic Viewer** to inspect raw data
+
+### Via Command Line
+
+```bash
+# List sensor topics
+gz topic --list
+
+# View LiDAR data
+gz topic --echo --topic /world/default/model/sensor_bot/link/lidar_link/sensor/lidar/scan
+
+# View IMU data
+gz topic --echo --topic /world/default/model/sensor_bot/link/base_link/sensor/imu/imu
+
+# Save camera image
+gz topic --echo --topic /world/default/model/sensor_bot/link/camera_link/sensor/rgbd/image \
+  --num 1 > camera_frame.raw
+```
+
+## Summary
+
+In this chapter, you learned:
+
+- **Why sensor simulation matters**: Algorithm development, synthetic data, sim-to-real validation
+- **LiDAR**: 2D (planar) and 3D (multi-beam) laser scanning with configurable beams, range, and noise
+- **Depth cameras**: RGB-D sensors that produce color images and per-pixel depth
+- **IMU**: Accelerometer and gyroscope simulation with bias drift modeling
+- **Camera sensors**: Configurable resolution, FOV, intrinsics, and noise
+- **Noise models**: Gaussian noise, bias drift, and depth-dependent noise for realism
+- **Complete sensor robot**: How to attach multiple sensors to a single robot model
+
+## Exercises
+
+### Exercise 1: LiDAR Configuration
+Create a 3D LiDAR sensor that matches the Ouster OS1-64 specifications:
+- 64 vertical beams
+- 360-degree horizontal scan
+- 120m max range
+- Vertical FOV: -22.5 to +22.5 degrees
+- 10 Hz update rate
+- Add Gaussian noise with 3 cm standard deviation
+
+### Exercise 2: Depth Camera Calibration
+Configure a depth camera that matches the Intel RealSense D435i:
+- RGB resolution: 1920x1080
+- Depth resolution: 1280x720
+- Horizontal FOV: 87 degrees (RGB) / 87 degrees (depth)
+- Min depth: 0.105m, Max depth: 10m
+- Add an IMU to the camera link (the D435i has a built-in IMU)
+
+### Exercise 3: Noise Impact Analysis
+Using Python, write a script that:
+1. Generates a clean 2D LiDAR scan (360 range values in a circular room)
+2. Adds Gaussian noise with stddev of 0.01m, 0.05m, and 0.1m
+3. Plots all four scans (clean + 3 noisy) overlaid
+4. Calculates the mean absolute error for each noise level
+
+```python
+"""Starter code for Exercise 3."""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Generate a clean scan in a 5m x 5m room
+angles = np.linspace(-np.pi, np.pi, 360, endpoint=False)
+
+# TODO: Compute true range to walls of a rectangular room
+# TODO: Add noise at three levels
+# TODO: Plot polar plots of all four scans
+# TODO: Compute MAE for each noise level
+```
+
+### Exercise 4: Sensor Suite Design
+Design the complete sensor suite for a humanoid robot. Specify:
+1. Which sensors to place on the head (cameras, depth sensors)
+2. Which sensors to place on the torso (IMU, additional cameras)
+3. Which sensors to place on the feet (force/torque sensors)
+4. Write the SDF snippets for at least 3 of these sensors with appropriate parameters
+
+### Exercise 5: Sensor Data Recording
+Launch the `sensor_bot` model in Gazebo with a test world. Using `gz topic` commands:
+1. List all sensor topics being published
+2. Record 10 seconds of IMU data
+3. Record a single camera frame
+4. Estimate the actual update rate of each sensor by counting messages over 5 seconds
+
+---
+
+**Next Chapter**: [ROS 2 + Gazebo Integration](./ros2-gazebo-integration) -- Connect your simulated sensors to ROS 2 nodes.

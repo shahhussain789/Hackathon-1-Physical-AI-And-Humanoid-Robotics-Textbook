@@ -1,0 +1,549 @@
+---
+title: ROS 2 Architecture & Core Concepts
+sidebar_label: 2. ROS 2 Architecture
+sidebar_position: 2
+description: Understand the ROS 2 architecture — DDS middleware, QoS policies, workspace structure, the colcon build system, and how to set up your development environment.
+keywords: [ros 2, dds, qos, colcon, workspace, middleware, architecture, installation]
+tags: [module1, ros2, architecture, setup]
+---
+
+# ROS 2 Architecture & Core Concepts
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Explain why ROS 2 was created and how it improves on ROS 1
+- Describe the DDS middleware layer and its role in ROS 2 communication
+- Configure Quality of Service (QoS) policies for different data streams
+- Set up a ROS 2 Humble workspace on Ubuntu 22.04
+- Create and build packages using colcon
+
+---
+
+## 2.1 Why ROS 2?
+
+ROS 1 (released 2007) revolutionized robotics by providing a standard communication framework, a massive ecosystem of packages, and tools for visualization and debugging. But it was designed as a research tool with assumptions that break down in production:
+
+| Limitation of ROS 1 | ROS 2 Solution |
+|---------------------|----------------|
+| Single point of failure (roscore) | Decentralized discovery (no master node) |
+| No real-time support | Real-time capable with DDS and RTOS support |
+| Linux only | Cross-platform (Linux, Windows, macOS) |
+| No built-in security | SROS2 with DDS security plugins |
+| Unreliable communication | QoS policies for reliability, durability, deadlines |
+| Single-robot focus | Multi-robot support via DDS domains |
+
+:::info ROS is Not an Operating System
+Despite its name, the Robot Operating System is **middleware** — a communication and tooling layer that runs on top of an actual operating system (Ubuntu Linux, typically). Think of it as a framework for building distributed robot applications, similar to how a web framework helps build web applications.
+:::
+
+### The ROS 2 Computation Graph
+
+At runtime, a ROS 2 system forms a **computation graph** — a network of processes (nodes) connected by communication primitives:
+
+```
+┌──────────┐   /camera/image    ┌──────────────┐   /detected_objects
+│  Camera   │ ───────────────► │   Object      │ ──────────────────►
+│  Driver   │     (Topic)       │   Detector    │      (Topic)
+└──────────┘                   └──────────────┘
+                                        │
+                                        │ /detect_object
+                                        │ (Service)
+                                        ▼
+                               ┌──────────────┐   /joint_commands
+                               │   Grasp       │ ──────────────────►
+                               │   Planner     │      (Topic)
+                               └──────────────┘
+                                        │
+                                        │ /execute_grasp
+                                        │ (Action)
+                                        ▼
+                               ┌──────────────┐
+                               │   Arm         │
+                               │   Controller  │
+                               └──────────────┘
+```
+
+The four communication primitives — **Topics**, **Services**, **Actions**, and **Parameters** — are covered in depth in Chapter 3. This chapter focuses on the infrastructure that makes them possible.
+
+---
+
+## 2.2 DDS: The Communication Backbone
+
+ROS 2 does not implement its own networking. Instead, it delegates all communication to **DDS (Data Distribution Service)**, an industry standard from the Object Management Group (OMG) used in military systems, air traffic control, and autonomous vehicles.
+
+### How DDS Works
+
+DDS provides **publish-subscribe** communication with automatic peer discovery:
+
+1. **Participant Discovery**: When a ROS 2 node starts, its DDS participant announces itself on the network. Other participants discover it automatically — no central broker needed.
+
+2. **Topic Matching**: DDS matches publishers and subscribers by topic name and data type. If a publisher offers `/camera/image` of type `sensor_msgs/Image` and a subscriber requests the same, DDS connects them.
+
+3. **Data Transport**: DDS can use shared memory (same machine), UDP multicast (local network), or TCP (wide area) depending on configuration.
+
+```
+Node A                          Node B
+┌──────────────┐               ┌──────────────┐
+│  Application │               │  Application │
+│    (rclpy)   │               │    (rclpy)   │
+├──────────────┤               ├──────────────┤
+│   RCL        │               │   RCL        │
+│ (ROS Client  │               │ (ROS Client  │
+│  Library)    │               │  Library)    │
+├──────────────┤               ├──────────────┤
+│   RMW        │               │   RMW        │
+│ (ROS Middle- │  DDS Protocol │ (ROS Middle- │
+│  ware Iface) │ ◄────────────►│  ware Iface) │
+├──────────────┤               ├──────────────┤
+│  DDS Impl    │               │  DDS Impl    │
+│ (Fast DDS /  │               │ (Fast DDS /  │
+│  Cyclone)    │               │  Cyclone)    │
+└──────────────┘               └──────────────┘
+```
+
+### DDS Implementations in ROS 2
+
+ROS 2 supports multiple DDS implementations through the **RMW (ROS Middleware Interface)** abstraction:
+
+| DDS Implementation | Package | Notes |
+|-------------------|---------|-------|
+| **Fast DDS** (eProsima) | `rmw_fastrtps_cpp` | Default in Humble, well-tested |
+| **Cyclone DDS** (Eclipse) | `rmw_cyclonedds_cpp` | Excellent performance, widely used |
+| **Connext DDS** (RTI) | `rmw_connextdds` | Commercial, used in safety-critical systems |
+
+You can switch DDS implementations with an environment variable:
+
+```bash
+# Use Cyclone DDS instead of the default
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+```
+
+### DDS Domains: Isolating Robot Systems
+
+DDS uses **domain IDs** (integers 0-232) to partition communication. Nodes in different domains cannot see each other. This is essential for:
+
+- Running multiple robots on the same network without interference
+- Isolating development and production environments
+- Separating simulation from real hardware
+
+```bash
+# Robot 1 uses domain 0
+export ROS_DOMAIN_ID=0
+
+# Robot 2 uses domain 1
+export ROS_DOMAIN_ID=1
+
+# These two robots will not see each other's topics
+```
+
+---
+
+## 2.3 Quality of Service (QoS) Policies
+
+Not all robot data is equal. IMU readings at 1000 Hz can tolerate occasional drops — but a command to stop the robot must be delivered reliably. DDS QoS policies let you specify these requirements per-topic.
+
+### Key QoS Policies
+
+| Policy | Options | Use Case |
+|--------|---------|----------|
+| **Reliability** | `RELIABLE` / `BEST_EFFORT` | Reliable for commands; best-effort for high-rate sensors |
+| **Durability** | `VOLATILE` / `TRANSIENT_LOCAL` | Transient local for late-joining subscribers (e.g., map data) |
+| **History** | `KEEP_LAST(n)` / `KEEP_ALL` | Keep last 1 for sensor data; keep all for logs |
+| **Deadline** | Duration | Alert if data stops arriving within expected period |
+| **Liveliness** | `AUTOMATIC` / `MANUAL` | Detect node crashes |
+| **Lifespan** | Duration | Discard data older than threshold |
+
+### QoS in Practice
+
+```python
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from sensor_msgs.msg import Imu
+from std_msgs.msg import String
+
+class SensorNode(Node):
+    def __init__(self):
+        super().__init__('sensor_node')
+
+        # IMU: high rate, best-effort is fine (occasional drops OK)
+        imu_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1  # Only keep the latest reading
+        )
+        self.imu_pub = self.create_publisher(Imu, '/imu/data', imu_qos)
+
+        # Safety commands: must be reliable
+        reliable_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        self.cmd_sub = self.create_subscription(
+            String, '/safety/emergency_stop', self.emergency_callback, reliable_qos
+        )
+
+    def emergency_callback(self, msg):
+        self.get_logger().fatal(f'EMERGENCY STOP received: {msg.data}')
+```
+
+:::warning QoS Compatibility
+Publisher and subscriber QoS must be **compatible** for communication to occur. A `RELIABLE` subscriber cannot connect to a `BEST_EFFORT` publisher (the subscriber demands guarantees the publisher does not offer). A `BEST_EFFORT` subscriber can connect to a `RELIABLE` publisher. When debugging silent communication failures, QoS mismatch is the first thing to check.
+:::
+
+### Common QoS Presets
+
+ROS 2 provides built-in QoS presets for common patterns:
+
+```python
+from rclpy.qos import qos_profile_sensor_data, qos_profile_system_default
+
+# Sensor data: best-effort, volatile, keep last 5
+sensor_qos = qos_profile_sensor_data
+
+# System default: reliable, volatile, keep last 10
+default_qos = qos_profile_system_default
+```
+
+---
+
+## 2.4 Workspace Structure and Packages
+
+A ROS 2 **workspace** is a directory containing one or more packages. Packages are the fundamental unit of organization — each package contains related nodes, message definitions, configuration files, and launch scripts.
+
+### Workspace Layout
+
+```
+ros2_ws/                    # Workspace root
+├── src/                    # Source space (your packages go here)
+│   ├── my_robot_pkg/       # A Python package
+│   │   ├── package.xml     # Package metadata and dependencies
+│   │   ├── setup.py        # Python package setup
+│   │   ├── setup.cfg       # Entry points configuration
+│   │   ├── resource/       # Package marker
+│   │   │   └── my_robot_pkg
+│   │   ├── my_robot_pkg/   # Python module
+│   │   │   ├── __init__.py
+│   │   │   ├── sensor_node.py
+│   │   │   └── controller_node.py
+│   │   ├── launch/         # Launch files
+│   │   │   └── robot_launch.py
+│   │   ├── config/         # Parameter files
+│   │   │   └── params.yaml
+│   │   └── test/           # Tests
+│   │       └── test_sensor.py
+│   └── my_robot_msgs/      # A message definition package
+│       ├── package.xml
+│       ├── CMakeLists.txt
+│       ├── msg/
+│       │   └── JointState.msg
+│       └── srv/
+│           └── GetPose.srv
+├── build/                  # Build artifacts (generated)
+├── install/                # Installed packages (generated)
+└── log/                    # Build logs (generated)
+```
+
+### The Package Manifest: package.xml
+
+Every ROS 2 package requires a `package.xml` that declares the package name, version, dependencies, and maintainer:
+
+```xml
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>my_humanoid_pkg</name>
+  <version>0.1.0</version>
+  <description>Humanoid robot control nodes</description>
+  <maintainer email="you@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build tool -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Runtime dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+
+  <!-- Test dependencies -->
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+```
+
+---
+
+## 2.5 The colcon Build System
+
+**colcon** (collective construction) is the build tool for ROS 2. It orchestrates the build of all packages in a workspace, resolving dependencies and compiling in the correct order.
+
+### Essential colcon Commands
+
+```bash
+# Navigate to workspace root
+cd ~/ros2_ws
+
+# Build all packages
+colcon build
+
+# Build a specific package
+colcon build --packages-select my_humanoid_pkg
+
+# Build with symlink install (changes to Python files take effect
+# without rebuilding — essential for development)
+colcon build --symlink-install
+
+# Build with verbose output
+colcon build --event-handlers console_direct+
+
+# Clean build artifacts
+rm -rf build/ install/ log/
+```
+
+### Source the Workspace
+
+After building, you must **source** the workspace overlay so that ROS 2 can find your packages:
+
+```bash
+# Source the ROS 2 installation (underlay)
+source /opt/ros/humble/setup.bash
+
+# Source your workspace (overlay)
+source ~/ros2_ws/install/setup.bash
+
+# Verify your package is discoverable
+ros2 pkg list | grep my_humanoid_pkg
+```
+
+:::tip Always Source Both
+A common mistake is forgetting to source the workspace after building. If `ros2 run` cannot find your package, the first thing to check is whether you sourced `install/setup.bash`. Add the source commands to your `~/.bashrc` for convenience:
+
+```bash
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
+```
+:::
+
+---
+
+## 2.6 Installation and Setup on Ubuntu 22.04
+
+This section walks through a complete ROS 2 Humble Hawksbill installation.
+
+### Step 1: Set Locale
+
+```bash
+sudo apt update && sudo apt install locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+```
+
+### Step 2: Add the ROS 2 Repository
+
+```bash
+# Install prerequisites
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+
+# Add the ROS 2 GPG key
+sudo apt update && sudo apt install curl -y
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+  -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+# Add the repository to sources list
+echo "deb [arch=$(dpkg --print-architecture) \
+  signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+  http://packages.ros.org/ros2/ubuntu \
+  $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
+  sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+```
+
+### Step 3: Install ROS 2 Humble
+
+```bash
+sudo apt update
+sudo apt upgrade
+
+# Desktop install (recommended — includes RViz, demos, tutorials)
+sudo apt install ros-humble-desktop
+
+# Or minimal install (no GUI tools)
+# sudo apt install ros-humble-ros-base
+```
+
+### Step 4: Install Development Tools
+
+```bash
+# colcon build tool
+sudo apt install python3-colcon-common-extensions
+
+# rosdep for dependency management
+sudo apt install python3-rosdep2
+sudo rosdep init
+rosdep update
+
+# Additional useful tools
+sudo apt install python3-argcomplete
+sudo apt install ros-humble-rqt*
+```
+
+### Step 5: Verify the Installation
+
+```bash
+# Source ROS 2
+source /opt/ros/humble/setup.bash
+
+# Run the demo talker in one terminal
+ros2 run demo_nodes_cpp talker
+
+# Run the demo listener in another terminal
+ros2 run demo_nodes_cpp listener
+```
+
+If you see the listener printing messages from the talker, ROS 2 is working correctly.
+
+### Step 6: Create Your Workspace
+
+```bash
+# Create workspace directory
+mkdir -p ~/ros2_ws/src
+
+# Build the empty workspace (this initializes the build system)
+cd ~/ros2_ws
+colcon build
+
+# Source the workspace
+source install/setup.bash
+```
+
+:::danger Do Not Mix ROS Distributions
+Never source multiple ROS 2 distributions in the same terminal session. If you have both Humble and Iron installed, source only one. Mixing them causes unpredictable build failures and runtime errors.
+:::
+
+### Docker Alternative for Non-Ubuntu Systems
+
+If you are on Windows or macOS, use Docker:
+
+```dockerfile
+# Dockerfile for ROS 2 Humble development
+FROM ros:humble-desktop
+
+# Install additional tools
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-colcon-common-extensions \
+    ros-humble-rqt* \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create workspace
+RUN mkdir -p /ros2_ws/src
+WORKDIR /ros2_ws
+
+# Source ROS 2 in every bash session
+RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+```
+
+```bash
+# Build and run the container
+docker build -t ros2-dev .
+docker run -it --rm \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $(pwd)/src:/ros2_ws/src \
+  ros2-dev bash
+```
+
+---
+
+## 2.7 Essential CLI Tools
+
+ROS 2 provides a rich command-line interface for introspecting the running system:
+
+```bash
+# List all running nodes
+ros2 node list
+
+# Get info about a specific node
+ros2 node info /camera_driver
+
+# List all active topics
+ros2 topic list
+
+# Show topic type and publishers/subscribers
+ros2 topic info /camera/image
+
+# Echo messages on a topic (live stream)
+ros2 topic echo /imu/data
+
+# Measure topic publication rate
+ros2 topic hz /imu/data
+
+# List all available services
+ros2 service list
+
+# Call a service from the command line
+ros2 service call /reset_robot std_srvs/srv/Trigger
+
+# List all parameters for a node
+ros2 param list /controller
+
+# Get a parameter value
+ros2 param get /controller max_velocity
+```
+
+These tools map directly to the computation graph concepts introduced earlier. Whenever you are debugging a ROS 2 system, these commands are your first line of investigation.
+
+---
+
+## 2.8 Summary
+
+ROS 2 provides the distributed communication infrastructure that modern robots need:
+
+- **DDS middleware** handles discovery, serialization, and transport without a central broker
+- **QoS policies** let you tune reliability, durability, and timing per-topic
+- **Workspaces and packages** organize code into reusable, dependency-managed units
+- **colcon** builds everything with a single command
+- **CLI tools** let you inspect and debug the running system in real time
+
+In the next chapter, we put this architecture to work by building nodes that communicate through topics, services, and actions.
+
+---
+
+## Exercises
+
+### Review Questions
+
+1. **Explain** three specific limitations of ROS 1 that ROS 2 addresses. For each, describe the ROS 2 solution.
+
+2. What is DDS and why did the ROS 2 developers choose to build on it rather than implementing their own communication layer?
+
+3. A robot has a camera publishing images (latency-tolerant, 30 Hz) and an emergency stop subscriber (must never miss a message). Specify the appropriate QoS settings for each and explain your choices.
+
+4. **Describe** the purpose of each directory in a ROS 2 workspace: `src/`, `build/`, `install/`, and `log/`.
+
+5. What happens if you forget to run `source install/setup.bash` after building your workspace? Why?
+
+### Hands-On
+
+6. **Installation Verification**: Install ROS 2 Humble following the steps in Section 2.6. Run the talker/listener demo and capture a screenshot showing both terminals.
+
+7. **CLI Exploration**: Start the talker/listener demo, then use `ros2 topic list`, `ros2 topic info`, `ros2 topic hz`, and `ros2 node list` to explore the running system. Document what each command reveals about the computation graph.
+
+8. **Workspace Setup**: Create a new workspace at `~/humanoid_ws/src`. Add a minimal Python package called `my_first_pkg` (you can use `ros2 pkg create --build-type ament_python my_first_pkg`). Build it and verify it appears in `ros2 pkg list`.
+
+9. **DDS Domain Experiment**: Open three terminals. In terminals 1 and 2, set `ROS_DOMAIN_ID=0` and run talker/listener. In terminal 3, set `ROS_DOMAIN_ID=1` and run a listener. Verify that the listener in domain 1 does NOT receive messages from domain 0.

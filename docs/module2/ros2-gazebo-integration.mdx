@@ -1,0 +1,835 @@
+---
+title: "ROS 2 + Gazebo Integration"
+sidebar_label: "ROS 2 + Gazebo"
+sidebar_position: 4
+description: Learn to integrate Gazebo with ROS 2 using the ros_gz bridge, spawn robots from launch files, control simulated robots via topics, and build complete simulation pipelines.
+keywords: [ROS 2, gazebo, ros_gz, bridge, launch file, simulation pipeline, robot spawning, sensor topics]
+tags: [module2, ros2, gazebo, integration, bridge]
+---
+
+# ROS 2 + Gazebo Integration
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Explain the architecture of the ROS 2-Gazebo bridge
+- Install and configure the `ros_gz` bridge packages
+- Spawn robot models into Gazebo from ROS 2 launch files
+- Bridge Gazebo sensor topics to ROS 2 topics
+- Control simulated robot joints via ROS 2 command topics
+- Read sensor data in Python ROS 2 nodes
+- Build a complete simulation pipeline with a single launch file
+
+## Why Bridge ROS 2 and Gazebo?
+
+Gazebo simulates the physics and sensors. ROS 2 runs your perception, planning, and control algorithms. The **bridge** connects them so that:
+
+- Sensor data generated in Gazebo appears as ROS 2 topics
+- Joint commands published in ROS 2 are applied to simulated actuators
+- Clock synchronization keeps everything in lockstep
+
+Without the bridge, Gazebo and ROS 2 are two separate systems that cannot communicate.
+
+```
+┌─────────────────┐    ros_gz bridge    ┌─────────────────┐
+│                 │ <─────────────────> │                 │
+│   Gazebo Sim    │   Sensor data ->    │    ROS 2        │
+│   (gz-transport)│   <- Joint commands │   (DDS/rmw)     │
+│                 │   Clock sync <->    │                 │
+└─────────────────┘                     └─────────────────┘
+```
+
+## Installing the Bridge
+
+### For ROS 2 Humble + Gazebo Harmonic
+
+```bash
+# Install the complete ros_gz package set
+sudo apt-get install -y ros-humble-ros-gz
+
+# This installs:
+# - ros_gz_bridge:     Topic/service bridge between gz-transport and ROS 2
+# - ros_gz_sim:        Launch utilities for spawning models
+# - ros_gz_image:      Image transport bridge
+# - ros_gz_interfaces: Shared message types
+```
+
+### Verify the Installation
+
+```bash
+# Source ROS 2
+source /opt/ros/humble/setup.bash
+
+# Check that the bridge packages exist
+ros2 pkg list | grep ros_gz
+
+# Expected output:
+# ros_gz_bridge
+# ros_gz_image
+# ros_gz_interfaces
+# ros_gz_sim
+```
+
+## The ros_gz Bridge
+
+### How the Bridge Works
+
+The `ros_gz_bridge` translates messages between Gazebo's transport layer (`gz-transport`, using Protobuf over ZeroMQ) and ROS 2's middleware (DDS). It maps Gazebo message types to their ROS 2 equivalents:
+
+| Gazebo Type | ROS 2 Type | Usage |
+|------------|-----------|-------|
+| `gz.msgs.LaserScan` | `sensor_msgs/msg/LaserScan` | LiDAR data |
+| `gz.msgs.Image` | `sensor_msgs/msg/Image` | Camera images |
+| `gz.msgs.IMU` | `sensor_msgs/msg/Imu` | IMU data |
+| `gz.msgs.PointCloudPacked` | `sensor_msgs/msg/PointCloud2` | 3D point clouds |
+| `gz.msgs.Twist` | `geometry_msgs/msg/Twist` | Velocity commands |
+| `gz.msgs.Clock` | `rosgraph_msgs/msg/Clock` | Simulation clock |
+| `gz.msgs.JointState` | `sensor_msgs/msg/JointState` | Joint positions/velocities |
+| `gz.msgs.Odometry` | `nav_msgs/msg/Odometry` | Robot odometry |
+
+### Running the Bridge Manually
+
+Start Gazebo in one terminal:
+
+```bash
+gz sim sensor_world.sdf
+```
+
+In a second terminal, run the bridge for specific topics:
+
+```bash
+source /opt/ros/humble/setup.bash
+
+# Bridge a LiDAR topic (Gazebo -> ROS 2)
+ros2 run ros_gz_bridge parameter_bridge \
+  /lidar/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan
+
+# Bridge a velocity command topic (ROS 2 -> Gazebo)
+ros2 run ros_gz_bridge parameter_bridge \
+  /cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist
+
+# Bridge bidirectionally
+ros2 run ros_gz_bridge parameter_bridge \
+  /joint_states@sensor_msgs/msg/JointState@gz.msgs.Model
+```
+
+The syntax for topic mapping is:
+
+```
+/topic_name@ros_type[gz_type    # Gazebo -> ROS 2 only
+/topic_name@ros_type]gz_type    # ROS 2 -> Gazebo only
+/topic_name@ros_type@gz_type    # Bidirectional
+```
+
+:::tip Bridge Direction Symbols
+Remember the bracket direction: `[` opens toward Gazebo (data flows from Gazebo to ROS 2), `]` opens toward ROS 2 (data flows from ROS 2 to Gazebo), and `@` on both sides means bidirectional.
+:::
+
+### Bridge Configuration via YAML
+
+For complex setups, use a YAML configuration file instead of command-line arguments:
+
+```yaml
+# bridge_config.yaml
+---
+- ros_topic_name: "/lidar/scan"
+  gz_topic_name: "/world/default/model/robot/link/lidar_link/sensor/lidar/scan"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/camera/image_raw"
+  gz_topic_name: "/world/default/model/robot/link/camera_link/sensor/rgbd/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/imu/data"
+  gz_topic_name: "/world/default/model/robot/link/base_link/sensor/imu/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/cmd_vel"
+  gz_topic_name: "/model/robot/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+```
+
+Run the bridge with this config:
+
+```bash
+ros2 run ros_gz_bridge parameter_bridge \
+  --ros-args -p config_file:=bridge_config.yaml
+```
+
+## Spawning Robots from ROS 2 Launch Files
+
+### The Spawn Node
+
+The `ros_gz_sim` package provides a node to spawn SDF or URDF models into a running Gazebo simulation:
+
+```bash
+# Spawn a model from an SDF file
+ros2 run ros_gz_sim create \
+  -name my_robot \
+  -file /path/to/robot.sdf \
+  -x 0 -y 0 -z 0.5
+
+# Spawn from the /robot_description topic (publishes URDF)
+ros2 run ros_gz_sim create \
+  -name my_robot \
+  -topic robot_description \
+  -x 0 -y 0 -z 0.5
+```
+
+### Complete Launch File
+
+Here is a production-quality launch file that starts Gazebo, spawns a robot, and sets up the bridge:
+
+```python
+"""Launch Gazebo with a robot and ROS 2 bridge."""
+
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    # Package paths
+    pkg_ros_gz_sim = get_package_share_directory("ros_gz_sim")
+    pkg_robot = get_package_share_directory("my_robot_description")
+
+    # File paths
+    world_file = os.path.join(pkg_robot, "worlds", "test_world.sdf")
+    urdf_file = os.path.join(pkg_robot, "urdf", "my_robot.urdf")
+    bridge_config = os.path.join(pkg_robot, "config", "bridge_config.yaml")
+    rviz_config = os.path.join(pkg_robot, "config", "simulation.rviz")
+
+    # Read the URDF
+    with open(urdf_file, "r") as f:
+        robot_description = f.read()
+
+    return LaunchDescription([
+        # === Declare launch arguments ===
+        DeclareLaunchArgument(
+            "use_sim_time",
+            default_value="true",
+            description="Use simulation (Gazebo) clock",
+        ),
+
+        # === 1. Start Gazebo ===
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(pkg_ros_gz_sim, "launch", "gz_sim.launch.py")
+            ),
+            launch_arguments={"gz_args": f"-r {world_file}"}.items(),
+        ),
+
+        # === 2. Publish robot description ===
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            parameters=[{
+                "robot_description": robot_description,
+                "use_sim_time": True,
+            }],
+            output="screen",
+        ),
+
+        # === 3. Spawn the robot into Gazebo ===
+        Node(
+            package="ros_gz_sim",
+            executable="create",
+            arguments=[
+                "-name", "my_robot",
+                "-topic", "robot_description",
+                "-x", "0", "-y", "0", "-z", "0.5",
+            ],
+            output="screen",
+        ),
+
+        # === 4. Bridge sensor and command topics ===
+        Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            parameters=[{"config_file": bridge_config}],
+            output="screen",
+        ),
+
+        # === 5. Launch RViz ===
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            arguments=["-d", rviz_config],
+            parameters=[{"use_sim_time": True}],
+            output="screen",
+        ),
+    ])
+```
+
+Run the launch file:
+
+```bash
+ros2 launch my_robot_description simulation.launch.py
+```
+
+This single command starts Gazebo, spawns your robot, bridges all sensor topics to ROS 2, and opens RViz for visualization.
+
+## Controlling Simulated Robots via ROS 2
+
+### Joint Position Control
+
+To control individual joints, Gazebo provides joint controller plugins. Add this to your robot's SDF:
+
+```xml
+<model name="my_robot">
+  <!-- ... links and joints ... -->
+
+  <plugin
+    filename="gz-sim-joint-position-controller-system"
+    name="gz::sim::systems::JointPositionController">
+    <joint_name>shoulder_joint</joint_name>
+    <topic>/model/my_robot/joint/shoulder_joint/cmd_pos</topic>
+    <p_gain>100</p_gain>
+    <i_gain>0.1</i_gain>
+    <d_gain>10</d_gain>
+  </plugin>
+
+  <plugin
+    filename="gz-sim-joint-position-controller-system"
+    name="gz::sim::systems::JointPositionController">
+    <joint_name>elbow_joint</joint_name>
+    <topic>/model/my_robot/joint/elbow_joint/cmd_pos</topic>
+    <p_gain>50</p_gain>
+    <i_gain>0.1</i_gain>
+    <d_gain>5</d_gain>
+  </plugin>
+
+  <!-- Publish joint states -->
+  <plugin
+    filename="gz-sim-joint-state-publisher-system"
+    name="gz::sim::systems::JointStatePublisher">
+    <joint_name>shoulder_joint</joint_name>
+    <joint_name>elbow_joint</joint_name>
+    <update_rate>100</update_rate>
+    <topic>/model/my_robot/joint_states</topic>
+  </plugin>
+</model>
+```
+
+### Sending Joint Commands from Python
+
+```python
+"""Send joint position commands to a simulated robot arm."""
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float64
+import math
+
+
+class JointCommander(Node):
+    """Publishes sinusoidal joint position commands."""
+
+    def __init__(self):
+        super().__init__("joint_commander")
+
+        # Publishers for each joint
+        self.shoulder_pub = self.create_publisher(
+            Float64,
+            "/model/my_robot/joint/shoulder_joint/cmd_pos",
+            10
+        )
+        self.elbow_pub = self.create_publisher(
+            Float64,
+            "/model/my_robot/joint/elbow_joint/cmd_pos",
+            10
+        )
+
+        # Timer for periodic publishing (50 Hz)
+        self.timer = self.create_timer(0.02, self.publish_commands)
+        self.start_time = self.get_clock().now()
+        self.get_logger().info("Joint commander started")
+
+    def publish_commands(self):
+        elapsed = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
+
+        # Sinusoidal motion for the shoulder
+        shoulder_cmd = Float64()
+        shoulder_cmd.data = 0.8 * math.sin(0.5 * elapsed)
+        self.shoulder_pub.publish(shoulder_cmd)
+
+        # Elbow follows with a phase offset
+        elbow_cmd = Float64()
+        elbow_cmd.data = 1.0 + 0.5 * math.sin(0.5 * elapsed + math.pi / 4)
+        self.elbow_pub.publish(elbow_cmd)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = JointCommander()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Bridge the command topics and run the node:
+
+```bash
+# Terminal 1: Bridge (if not already in launch file)
+ros2 run ros_gz_bridge parameter_bridge \
+  /model/my_robot/joint/shoulder_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double \
+  /model/my_robot/joint/elbow_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double
+
+# Terminal 2: Run the commander
+ros2 run my_robot_control joint_commander
+```
+
+### Velocity Control with Twist Messages
+
+For mobile bases, use the `DiffDrive` plugin and `Twist` messages:
+
+```xml
+<plugin
+  filename="gz-sim-diff-drive-system"
+  name="gz::sim::systems::DiffDrive">
+  <left_joint>left_wheel_joint</left_joint>
+  <right_joint>right_wheel_joint</right_joint>
+  <wheel_separation>0.5</wheel_separation>
+  <wheel_radius>0.1</wheel_radius>
+  <topic>/cmd_vel</topic>
+  <odom_topic>/odom</odom_topic>
+  <odom_publish_frequency>50</odom_publish_frequency>
+</plugin>
+```
+
+```python
+"""Drive a simulated differential-drive robot in a circle."""
+
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+
+
+class CircleDriver(Node):
+    """Drives the robot in a circle using velocity commands."""
+
+    def __init__(self):
+        super().__init__("circle_driver")
+        self.publisher = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.timer = self.create_timer(0.1, self.publish_command)
+        self.get_logger().info("Circle driver started")
+
+    def publish_command(self):
+        msg = Twist()
+        msg.linear.x = 0.5   # 0.5 m/s forward
+        msg.angular.z = 0.3  # 0.3 rad/s turning left
+        self.publisher.publish(msg)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = CircleDriver()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        # Send stop command before exiting
+        stop_msg = Twist()
+        node.publisher.publish(stop_msg)
+        node.get_logger().info("Stopped")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+## Reading Sensor Data in ROS 2 Nodes
+
+### LiDAR Data Subscriber
+
+```python
+"""Subscribe to LiDAR data and detect the nearest obstacle."""
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+import numpy as np
+
+
+class LidarProcessor(Node):
+    """Processes LiDAR scan data and finds nearest obstacles."""
+
+    def __init__(self):
+        super().__init__("lidar_processor")
+        self.subscription = self.create_subscription(
+            LaserScan, "/lidar/scan", self.scan_callback, 10
+        )
+
+    def scan_callback(self, msg: LaserScan):
+        ranges = np.array(msg.ranges)
+        valid = ranges[np.isfinite(ranges)]
+
+        if len(valid) == 0:
+            self.get_logger().warn("No valid LiDAR readings")
+            return
+
+        min_dist = np.min(valid)
+        min_idx = np.argmin(ranges[np.isfinite(ranges)])
+        angle_rad = msg.angle_min + min_idx * msg.angle_increment
+        angle_deg = np.degrees(angle_rad)
+
+        self.get_logger().info(
+            f"Nearest obstacle: {min_dist:.2f}m at {angle_deg:.1f} deg | "
+            f"Valid points: {len(valid)}/{len(ranges)}"
+        )
+
+        if min_dist < 0.5:
+            self.get_logger().warn("COLLISION WARNING: Object within 0.5m!")
+```
+
+### IMU Data Subscriber
+
+```python
+"""Subscribe to IMU data and compute orientation."""
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+import math
+
+
+def quaternion_to_euler(x, y, z, w):
+    """Convert quaternion to roll, pitch, yaw (in radians)."""
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    sinp = max(-1.0, min(1.0, sinp))
+    pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+
+
+class ImuProcessor(Node):
+    """Processes IMU data and logs orientation and acceleration."""
+
+    def __init__(self):
+        super().__init__("imu_processor")
+        self.subscription = self.create_subscription(
+            Imu, "/imu/data", self.imu_callback, 10
+        )
+
+    def imu_callback(self, msg: Imu):
+        q = msg.orientation
+        roll, pitch, yaw = quaternion_to_euler(q.x, q.y, q.z, q.w)
+
+        accel = msg.linear_acceleration
+        accel_magnitude = math.sqrt(accel.x**2 + accel.y**2 + accel.z**2)
+
+        self.get_logger().info(
+            f"RPY: [{math.degrees(roll):.1f}, {math.degrees(pitch):.1f}, "
+            f"{math.degrees(yaw):.1f}] deg | "
+            f"Accel magnitude: {accel_magnitude:.2f} m/s^2"
+        )
+```
+
+### Camera Image Subscriber
+
+```python
+"""Subscribe to camera images and display with OpenCV."""
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+import cv2
+
+
+class CameraViewer(Node):
+    """Displays camera images from the simulated robot."""
+
+    def __init__(self):
+        super().__init__("camera_viewer")
+        self.bridge = CvBridge()
+        self.subscription = self.create_subscription(
+            Image, "/camera/image_raw", self.image_callback, 10
+        )
+
+    def image_callback(self, msg: Image):
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        cv2.imshow("Simulated Camera", cv_image)
+        cv2.waitKey(1)
+
+        self.get_logger().info(
+            f"Frame: {msg.width}x{msg.height}, encoding={msg.encoding}",
+            throttle_duration_sec=2.0
+        )
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = CameraViewer()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cv2.destroyAllWindows()
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+:::tip cv_bridge Installation
+The `cv_bridge` package bridges ROS 2 image messages and OpenCV:
+```bash
+sudo apt-get install -y ros-humble-cv-bridge python3-opencv
+```
+:::
+
+## Building a Complete Simulation Pipeline
+
+### Recommended Package Structure
+
+```
+my_robot_sim/
+  package.xml
+  setup.py
+  resource/
+    my_robot_sim                 # Empty marker file for ament
+  launch/
+    simulation.launch.py         # Main launch file
+  config/
+    bridge_config.yaml           # Topic bridge mapping
+    simulation.rviz              # RViz configuration
+  worlds/
+    test_world.sdf               # Gazebo world
+  my_robot_sim/
+    __init__.py
+    joint_commander.py           # Joint control node
+    lidar_processor.py           # LiDAR processing node
+    imu_processor.py             # IMU processing node
+    camera_viewer.py             # Camera display node
+```
+
+### The setup.py
+
+```python
+from setuptools import setup
+
+package_name = "my_robot_sim"
+
+setup(
+    name=package_name,
+    version="0.1.0",
+    packages=[package_name],
+    data_files=[
+        ("share/ament_index/resource_index/packages",
+         ["resource/" + package_name]),
+        ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name + "/launch",
+         ["launch/simulation.launch.py"]),
+        ("share/" + package_name + "/config",
+         ["config/bridge_config.yaml"]),
+        ("share/" + package_name + "/worlds",
+         ["worlds/test_world.sdf"]),
+    ],
+    install_requires=["setuptools"],
+    entry_points={
+        "console_scripts": [
+            "joint_commander = my_robot_sim.joint_commander:main",
+            "lidar_processor = my_robot_sim.lidar_processor:main",
+            "imu_processor = my_robot_sim.imu_processor:main",
+            "camera_viewer = my_robot_sim.camera_viewer:main",
+        ],
+    },
+)
+```
+
+### Testing the Complete Pipeline
+
+```bash
+# Build the workspace
+cd ~/ros2_ws
+colcon build --packages-select my_robot_description my_robot_sim
+
+# Source the workspace
+source install/setup.bash
+
+# Launch everything
+ros2 launch my_robot_sim simulation.launch.py
+```
+
+In separate terminals, verify the pipeline:
+
+```bash
+# List all active topics
+ros2 topic list
+
+# Verify sensor data rates
+ros2 topic hz /lidar/scan        # Should show ~10 Hz
+ros2 topic hz /camera/image_raw  # Should show ~30 Hz
+ros2 topic hz /imu/data          # Should show ~200 Hz
+
+# Echo a single IMU message
+ros2 topic echo /imu/data --once
+
+# Record all sensor data for later playback
+ros2 bag record /lidar/scan /camera/image_raw /imu/data -o sim_data
+```
+
+## Clock Synchronization
+
+:::warning Simulation Time vs. Wall Time
+When running with Gazebo, always use **simulation time** (from Gazebo's clock) instead of wall-clock time. This ensures reproducible behavior whether the simulation runs slower or faster than real time.
+
+Set the `use_sim_time` parameter on all your nodes:
+```python
+Node(
+    package="my_package",
+    executable="my_node",
+    parameters=[{"use_sim_time": True}],
+)
+```
+
+And bridge the clock topic:
+```yaml
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+```
+
+If you forget this, your nodes will use wall-clock time, and their timestamps will not match Gazebo's sensor timestamps. This causes TF lookup failures and incorrect data associations.
+:::
+
+## Debugging the Bridge
+
+### Common Issues and Solutions
+
+**Problem**: Topics appear in `ros2 topic list` but no data arrives.
+**Cause**: Gazebo topic name mismatch. Gazebo topics include the world and model name.
+**Fix**: Use `gz topic --list` to see the exact Gazebo topic names and update your bridge config.
+
+**Problem**: `ros2 topic hz` shows 0 Hz.
+**Cause**: The bridge is running but the Gazebo simulation is paused.
+**Fix**: Press Play in the Gazebo GUI or launch with `-r` flag for auto-run: `gz_args: "-r world.sdf"`.
+
+**Problem**: Image data is corrupted or wrong encoding.
+**Cause**: Encoding mismatch between Gazebo image format and what your subscriber expects.
+**Fix**: Check the `format` in your SDF camera sensor matches what `cv_bridge` expects.
+
+### Useful Debugging Commands
+
+```bash
+# See all Gazebo topics (run while Gazebo is running)
+gz topic --list
+
+# See all ROS 2 topics
+ros2 topic list
+
+# Compare: every Gazebo sensor topic should have a ROS 2 counterpart
+# if you configured the bridge correctly
+
+# Check bridge node is running
+ros2 node list | grep bridge
+
+# See bridge node's connections
+ros2 node info /ros_gz_bridge
+```
+
+## Summary
+
+In this chapter, you learned:
+
+- **ros_gz bridge**: Translates between gz-transport (Protobuf/ZeroMQ) and ROS 2 (DDS)
+- **Topic mapping**: Syntax for unidirectional (`[`, `]`) and bidirectional (`@`) bridges
+- **YAML configuration**: Scalable bridge setup for complex robots with many sensors
+- **Robot spawning**: Launching robots into Gazebo from ROS 2 launch files
+- **Joint control**: Position controllers via Gazebo plugins with PID gains
+- **Velocity control**: Differential drive via Twist messages
+- **Sensor subscribers**: Python nodes for LiDAR, IMU, and camera data processing
+- **Complete pipeline**: Package structure, launch files, build, and test workflow
+- **Clock sync**: Using simulation time for reproducible, correct behavior
+
+:::info The Complete Data Flow
+```
+Your Python Code -> ROS 2 Topic -> ros_gz_bridge -> Gazebo Physics -> Visual Feedback
+                                                                      |
+Your Python Code <- ROS 2 Topic <- ros_gz_bridge <- Gazebo Sensors  <-+
+```
+This closed loop is the foundation of all robot simulation. You send commands, the physics engine simulates the result, sensors observe the outcome, and your algorithms decide the next action.
+:::
+
+## Exercises
+
+### Exercise 1: Bridge Configuration
+Create a YAML bridge configuration for the `sensor_bot` model from Chapter 3:
+1. Map LiDAR scan data to `/scan`
+2. Map RGB-D camera image to `/camera/image_raw` and depth to `/camera/depth`
+3. Map IMU data to `/imu/data`
+4. Map clock for time synchronization
+5. Launch Gazebo, start the bridge, and verify all topics with `ros2 topic list` and `ros2 topic hz`
+
+### Exercise 2: Joint Control Node
+Write a ROS 2 Python node that:
+1. Subscribes to `/model/my_robot/joint_states` to read current positions
+2. Implements a proportional controller: `cmd = Kp * (target - current)`
+3. Publishes position commands to move the arm through a sequence of 3 target poses
+4. Logs the joint position error at each step
+
+### Exercise 3: Reactive Obstacle Avoidance
+Combine LiDAR and velocity control:
+1. Subscribe to `/lidar/scan`
+2. Publish to `/cmd_vel`
+3. Drive forward at 0.3 m/s
+4. When an obstacle is detected within 1.0m, turn away from it
+5. When an obstacle is within 0.3m, stop completely
+
+### Exercise 4: Complete Launch File
+Create a launch file from scratch that:
+1. Starts Gazebo with a world containing walls and obstacles
+2. Spawns a robot with LiDAR, camera, and IMU sensors
+3. Bridges all sensor and command topics
+4. Starts RViz configured to show the robot model, LiDAR scan, and camera image
+5. Starts your obstacle avoidance node from Exercise 3
+
+### Exercise 5: Data Recording and Playback
+Use `ros2 bag` to create a reproducible test dataset:
+1. Record all sensor topics for 60 seconds while driving the robot around the obstacle world
+2. Stop the recording and simulation
+3. Play back the bag file: `ros2 bag play sim_recording`
+4. Run your processing nodes against the recorded data and verify they produce the same output
+5. This workflow is how professional robotics teams create regression test datasets
+
+---
+
+**Next Chapter**: [Unity for Robot Visualization](./unity-robotics) -- Explore high-fidelity rendering and human-robot interaction with Unity.

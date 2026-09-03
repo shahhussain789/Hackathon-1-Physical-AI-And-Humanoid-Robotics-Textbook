@@ -1,0 +1,807 @@
+---
+title: "Nodes, Topics, Services & Actions"
+sidebar_label: 3. Nodes, Topics, Services
+sidebar_position: 3
+description: Master the four ROS 2 communication primitives — publisher/subscriber topics, request/response services, and long-running action servers with practical Python examples.
+keywords: [ros 2, nodes, topics, services, actions, publisher, subscriber, rclpy]
+tags: [module1, ros2, communication, nodes, topics, services, actions]
+---
+
+# Nodes, Topics, Services & Actions
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+- Explain the role of nodes as the fundamental computation units in ROS 2
+- Implement publisher/subscriber communication using topics
+- Build request/response interactions using services
+- Create action servers and clients for long-running tasks
+- Choose the right communication pattern for a given robotics problem
+
+---
+
+## 3.1 Nodes: The Building Blocks
+
+A **node** is a single-purpose process in the ROS 2 computation graph. Each node should do one thing well:
+
+- A **camera driver node** reads frames from hardware and publishes images
+- A **detector node** subscribes to images and publishes detected objects
+- A **planner node** subscribes to detections and publishes motion commands
+- A **controller node** subscribes to commands and drives the motors
+
+This decomposition follows the Unix philosophy: small, composable units connected by well-defined interfaces. The benefit is that you can replace any node without affecting the others. Swap the camera driver for a simulated one, or replace a classical detector with a neural network — the rest of the graph does not change.
+
+### Creating a Minimal Node
+
+```python
+import rclpy
+from rclpy.node import Node
+
+
+class MinimalNode(Node):
+    """The simplest possible ROS 2 node."""
+
+    def __init__(self):
+        # 'minimal_node' is the node name visible in the computation graph
+        super().__init__('minimal_node')
+        self.get_logger().info('Minimal node has started.')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MinimalNode()
+
+    try:
+        # spin() blocks and processes callbacks until shutdown
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Key points:
+- `rclpy.init()` initializes the ROS 2 client library
+- Every node class inherits from `rclpy.node.Node`
+- The constructor argument (`'minimal_node'`) becomes the node's identity in the graph
+- `rclpy.spin()` enters the event loop, processing callbacks (timers, subscribers, services) until the node is shut down
+- Always clean up with `destroy_node()` and `rclpy.shutdown()`
+
+### Node Lifecycle
+
+Nodes follow a predictable lifecycle:
+
+```
+Created → Configured → Active → [Deactivating → Inactive → ...]→ Destroyed
+```
+
+For basic nodes, you only need `Created` and `Active` (which is what happens when you call `rclpy.spin()`). ROS 2 also supports **managed lifecycle nodes** that transition through explicit states — useful for coordinating system startup (e.g., ensuring the camera is configured before the detector starts).
+
+---
+
+## 3.2 Topics: Publisher/Subscriber Communication
+
+Topics are the most common communication pattern in ROS 2. They implement **asynchronous, one-to-many** messaging:
+
+- A **publisher** sends messages to a named topic
+- One or more **subscribers** receive those messages
+- Publishers and subscribers are decoupled — neither knows about the other
+
+```
+Publisher ──► Topic ("/imu/data") ──► Subscriber A (balance controller)
+                                  ──► Subscriber B (data logger)
+                                  ──► Subscriber C (visualization)
+```
+
+### Message Types
+
+Every topic has a **message type** that defines its data structure. ROS 2 provides hundreds of standard message types:
+
+```python
+# Common message types for humanoid robotics
+from std_msgs.msg import String, Float64, Bool, Int32
+from geometry_msgs.msg import Twist, Pose, Point, Quaternion
+from sensor_msgs.msg import JointState, Imu, Image, LaserScan
+from nav_msgs.msg import Odometry, Path
+```
+
+Message types use a simple definition language. For example, `geometry_msgs/msg/Twist`:
+
+```
+# Represents velocity in free space, broken into linear and angular parts
+Vector3 linear    # Linear velocity (x, y, z) in m/s
+Vector3 angular   # Angular velocity (x, y, z) in rad/s
+```
+
+### Writing a Publisher
+
+Let's create a publisher that simulates IMU data from a humanoid robot's torso:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+from builtin_interfaces.msg import Time
+import math
+import random
+
+
+class ImuPublisher(Node):
+    """Simulates IMU data from a humanoid robot's torso."""
+
+    def __init__(self):
+        super().__init__('imu_publisher')
+
+        # Create publisher: message type, topic name, queue size
+        self.publisher = self.create_publisher(Imu, '/torso/imu', 10)
+
+        # Create a timer that fires at 100 Hz
+        timer_period = 0.01  # seconds (100 Hz)
+        self.timer = self.create_timer(timer_period, self.publish_imu)
+
+        self.t = 0.0
+        self.get_logger().info('IMU publisher started at 100 Hz')
+
+    def publish_imu(self):
+        msg = Imu()
+
+        # Timestamp
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'torso_imu_link'
+
+        # Simulate gentle swaying (as if the robot is standing)
+        sway_freq = 0.5  # Hz
+        noise_std = 0.01  # rad/s
+
+        # Angular velocity (gyroscope)
+        msg.angular_velocity.x = 0.02 * math.sin(2 * math.pi * sway_freq * self.t) \
+            + random.gauss(0, noise_std)
+        msg.angular_velocity.y = 0.015 * math.cos(2 * math.pi * sway_freq * self.t) \
+            + random.gauss(0, noise_std)
+        msg.angular_velocity.z = random.gauss(0, noise_std)
+
+        # Linear acceleration (accelerometer) — gravity + noise
+        msg.linear_acceleration.x = random.gauss(0, 0.05)
+        msg.linear_acceleration.y = random.gauss(0, 0.05)
+        msg.linear_acceleration.z = 9.81 + random.gauss(0, 0.05)
+
+        self.publisher.publish(msg)
+        self.t += 0.01
+
+        # Log every 100th message (once per second)
+        if int(self.t * 100) % 100 == 0:
+            self.get_logger().info(
+                f'Published IMU: gyro_x={msg.angular_velocity.x:.4f} rad/s'
+            )
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ImuPublisher()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+### Writing a Subscriber
+
+Now a subscriber that processes IMU data and detects if the robot is tilting dangerously:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+import math
+
+
+class TiltDetector(Node):
+    """Monitors IMU data and warns if the robot tilts beyond safe limits."""
+
+    TILT_THRESHOLD_DEG = 15.0  # Maximum safe tilt angle
+
+    def __init__(self):
+        super().__init__('tilt_detector')
+
+        # Subscribe to IMU topic
+        self.subscription = self.create_subscription(
+            Imu,                    # Message type
+            '/torso/imu',           # Topic name
+            self.imu_callback,      # Callback function
+            10                      # Queue size
+        )
+
+        # State for complementary filter
+        self.pitch = 0.0
+        self.roll = 0.0
+        self.last_time = None
+        self.alpha = 0.98
+
+        self.get_logger().info('Tilt detector started')
+
+    def imu_callback(self, msg: Imu):
+        """Called every time a new IMU message arrives."""
+        current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
+        if self.last_time is not None:
+            dt = current_time - self.last_time
+
+            if dt > 0 and dt < 1.0:  # Sanity check on dt
+                # Gyroscope integration
+                gyro_pitch = self.pitch + msg.angular_velocity.y * dt
+                gyro_roll = self.roll + msg.angular_velocity.x * dt
+
+                # Accelerometer angles
+                ax = msg.linear_acceleration.x
+                ay = msg.linear_acceleration.y
+                az = msg.linear_acceleration.z
+                accel_pitch = math.atan2(ax, math.sqrt(ay**2 + az**2))
+                accel_roll = math.atan2(ay, math.sqrt(ax**2 + az**2))
+
+                # Complementary filter
+                self.pitch = self.alpha * gyro_pitch + (1 - self.alpha) * accel_pitch
+                self.roll = self.alpha * gyro_roll + (1 - self.alpha) * accel_roll
+
+                # Check tilt
+                pitch_deg = math.degrees(self.pitch)
+                roll_deg = math.degrees(self.roll)
+                total_tilt = math.sqrt(pitch_deg**2 + roll_deg**2)
+
+                if total_tilt > self.TILT_THRESHOLD_DEG:
+                    self.get_logger().warn(
+                        f'TILT WARNING: {total_tilt:.1f} deg '
+                        f'(pitch={pitch_deg:.1f}, roll={roll_deg:.1f})'
+                    )
+
+        self.last_time = current_time
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TiltDetector()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+:::tip Multiple Subscribers, One Topic
+Any number of nodes can subscribe to the same topic. The IMU data can simultaneously feed a balance controller, a tilt detector, a data logger, and a visualization tool. This fan-out is free — DDS handles it efficiently.
+:::
+
+---
+
+## 3.3 Services: Request/Response
+
+While topics are for continuous data streams, **services** provide synchronous request/response communication. A client sends a request and blocks (or awaits) until the server returns a response.
+
+Use services when:
+- You need a **response** confirming the action was taken
+- The operation is **quick** (under a few seconds)
+- The interaction is **one-to-one** (one client, one server)
+
+### Service Definitions
+
+Services have a request and response section separated by `---`:
+
+```
+# Example: humanoid_msgs/srv/GetJointAngle.srv
+string joint_name       # Request: which joint?
+---
+float64 angle           # Response: current angle in radians
+bool success            # Response: was the query successful?
+string message          # Response: error message if not successful
+```
+
+### Writing a Service Server
+
+```python
+import rclpy
+from rclpy.node import Node
+from example_interfaces.srv import SetBool
+
+
+class CalibrationService(Node):
+    """Service server that handles robot calibration requests."""
+
+    def __init__(self):
+        super().__init__('calibration_service')
+
+        # Create a service: service type, service name, callback
+        self.srv = self.create_service(
+            SetBool,
+            '/robot/calibrate',
+            self.calibrate_callback
+        )
+
+        self.is_calibrated = False
+        self.get_logger().info('Calibration service ready')
+
+    def calibrate_callback(self, request, response):
+        """
+        Handle calibration request.
+        request.data = True means "start calibration"
+        request.data = False means "reset calibration"
+        """
+        if request.data:
+            self.get_logger().info('Starting calibration sequence...')
+            # In a real robot, this would command joints to known positions,
+            # read encoder values, and compute offsets
+            self.is_calibrated = True
+            response.success = True
+            response.message = 'Calibration complete. All joints zeroed.'
+        else:
+            self.get_logger().info('Resetting calibration.')
+            self.is_calibrated = False
+            response.success = True
+            response.message = 'Calibration reset.'
+
+        return response
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = CalibrationService()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+### Writing a Service Client
+
+```python
+import rclpy
+from rclpy.node import Node
+from example_interfaces.srv import SetBool
+
+
+class CalibrationClient(Node):
+    """Service client that requests robot calibration."""
+
+    def __init__(self):
+        super().__init__('calibration_client')
+        self.client = self.create_client(SetBool, '/robot/calibrate')
+
+        # Wait for the service to become available
+        while not self.client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for calibration service...')
+
+        self.get_logger().info('Calibration service found!')
+
+    def send_request(self, calibrate: bool):
+        """Send a calibration request and wait for the response."""
+        request = SetBool.Request()
+        request.data = calibrate
+
+        # call_async returns a Future
+        future = self.client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+
+        return future.result()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    client = CalibrationClient()
+
+    # Request calibration
+    response = client.send_request(True)
+    if response.success:
+        client.get_logger().info(f'Success: {response.message}')
+    else:
+        client.get_logger().error(f'Failed: {response.message}')
+
+    client.destroy_node()
+    rclpy.shutdown()
+```
+
+### From the Command Line
+
+You can also call services directly from the terminal, which is invaluable for testing:
+
+```bash
+# List available services
+ros2 service list
+
+# Check the service type
+ros2 service type /robot/calibrate
+
+# Call the service
+ros2 service call /robot/calibrate example_interfaces/srv/SetBool "{data: true}"
+```
+
+---
+
+## 3.4 Actions: Long-Running Tasks
+
+Services are designed for quick operations. But many robot tasks take significant time: walking to a location, picking up an object, scanning a room. For these, ROS 2 provides **actions** — an extension of services with:
+
+- **Goal**: The client sends a goal (e.g., "walk to position x=3, y=5")
+- **Feedback**: The server periodically reports progress (e.g., "50% of path completed")
+- **Result**: The server returns a final result when done (e.g., "reached goal" or "aborted")
+- **Cancellation**: The client can cancel the goal mid-execution
+
+```
+Client                          Server
+  │                               │
+  │─── Send Goal ────────────────►│
+  │◄── Goal Accepted ────────────│
+  │                               │
+  │◄── Feedback (10% done) ──────│
+  │◄── Feedback (30% done) ──────│
+  │◄── Feedback (50% done) ──────│
+  │◄── Feedback (80% done) ──────│
+  │                               │
+  │◄── Result (success!) ────────│
+  │                               │
+```
+
+### Action Definitions
+
+Actions have three sections — goal, result, and feedback:
+
+```
+# WalkToPoint.action
+# Goal
+float64 target_x
+float64 target_y
+float64 target_theta   # orientation at goal
+---
+# Result
+bool success
+float64 final_x
+float64 final_y
+float64 total_distance
+---
+# Feedback
+float64 current_x
+float64 current_y
+float64 distance_remaining
+float64 percent_complete
+```
+
+### Writing an Action Server
+
+Here is an action server that simulates a humanoid robot walking to a target location:
+
+```python
+import rclpy
+from rclpy.action import ActionServer
+from rclpy.node import Node
+from example_interfaces.action import Fibonacci
+import time
+import math
+
+
+class WalkServer(Node):
+    """
+    Action server that simulates walking to a target position.
+
+    Uses Fibonacci action type as a structural example — in practice,
+    you would define a custom WalkToPoint.action.
+    """
+
+    def __init__(self):
+        super().__init__('walk_server')
+
+        self._action_server = ActionServer(
+            self,
+            Fibonacci,
+            '/robot/walk',
+            self.execute_callback
+        )
+
+        self.get_logger().info('Walk action server ready')
+
+    async def execute_callback(self, goal_handle):
+        """Execute the walking action with progress feedback."""
+        self.get_logger().info('Walking goal received')
+
+        order = goal_handle.request.order
+        feedback_msg = Fibonacci.Feedback()
+        feedback_msg.partial_sequence = [0, 1]
+
+        for i in range(2, order + 1):
+            # Check if the client requested cancellation
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                self.get_logger().info('Walk canceled by client')
+                result = Fibonacci.Result()
+                result.sequence = feedback_msg.partial_sequence
+                return result
+
+            # Simulate one step of walking
+            next_val = feedback_msg.partial_sequence[-1] + \
+                       feedback_msg.partial_sequence[-2]
+            feedback_msg.partial_sequence.append(next_val)
+
+            # Publish feedback so the client knows our progress
+            goal_handle.publish_feedback(feedback_msg)
+            self.get_logger().info(f'Step {i}/{order} complete')
+
+            # Simulate time to take a step (0.5 seconds per step)
+            time.sleep(0.5)
+
+        # Walking complete — mark goal as succeeded
+        goal_handle.succeed()
+        result = Fibonacci.Result()
+        result.sequence = feedback_msg.partial_sequence
+        self.get_logger().info('Walk completed successfully')
+        return result
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = WalkServer()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+### Writing an Action Client
+
+```python
+import rclpy
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from example_interfaces.action import Fibonacci
+
+
+class WalkClient(Node):
+    """Action client that sends walking goals and monitors progress."""
+
+    def __init__(self):
+        super().__init__('walk_client')
+        self._action_client = ActionClient(self, Fibonacci, '/robot/walk')
+        self.get_logger().info('Walk client initialized')
+
+    def send_goal(self, steps):
+        """Send a walking goal."""
+        goal_msg = Fibonacci.Goal()
+        goal_msg.order = steps
+
+        self.get_logger().info(f'Sending walk goal: {steps} steps')
+
+        # Wait for the action server to be available
+        self._action_client.wait_for_server()
+
+        # Send the goal with a feedback callback
+        self._send_goal_future = self._action_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback
+        )
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        """Called when the server accepts or rejects the goal."""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected')
+            return
+
+        self.get_logger().info('Goal accepted, walking...')
+
+        # Request the result asynchronously
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def feedback_callback(self, feedback_msg):
+        """Called each time the server publishes feedback."""
+        progress = feedback_msg.feedback.partial_sequence
+        self.get_logger().info(f'Feedback — steps taken: {len(progress)}')
+
+    def get_result_callback(self, future):
+        """Called when the action completes."""
+        result = future.result().result
+        self.get_logger().info(f'Walk complete! Final sequence: {result.sequence}')
+        rclpy.shutdown()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    client = WalkClient()
+    client.send_goal(steps=10)
+    rclpy.spin(client)
+```
+
+---
+
+## 3.5 Choosing the Right Pattern
+
+When designing a ROS 2 system, selecting the correct communication pattern is critical:
+
+| Pattern | When to Use | Examples |
+|---------|-------------|---------|
+| **Topic** | Continuous data streams, one-to-many, no response needed | Sensor data, joint states, camera images, velocity commands |
+| **Service** | Quick request/response, one-to-one | Get current pose, set parameter, trigger calibration |
+| **Action** | Long-running tasks with progress feedback and cancellation | Walk to goal, pick up object, execute trajectory |
+| **Parameter** | Configuration values that change infrequently | PID gains, sensor thresholds, frame IDs |
+
+### Decision Flowchart
+
+```
+Is this continuous streaming data?
+├── YES → Use a TOPIC
+└── NO
+    ├── Does the operation complete quickly (< 1 second)?
+    │   ├── YES → Use a SERVICE
+    │   └── NO
+    │       ├── Do you need progress feedback or cancellation?
+    │       │   ├── YES → Use an ACTION
+    │       │   └── NO → Use a SERVICE (but consider action)
+    └── Is this a configuration value?
+        └── YES → Use a PARAMETER
+```
+
+### Humanoid Robot Communication Map
+
+A complete humanoid robot system uses all patterns together:
+
+```
+TOPICS (continuous streams):
+  /joint_states          → Current position/velocity of all joints
+  /imu/data              → Inertial measurement data
+  /camera/rgb/image      → Camera frames
+  /camera/depth/image    → Depth frames
+  /cmd_vel               → Velocity commands
+  /foot_contacts         → Binary foot contact sensors
+  /tf                    → Coordinate frame transforms
+
+SERVICES (quick operations):
+  /robot/enable          → Enable/disable motor power
+  /robot/calibrate       → Run calibration routine
+  /robot/get_battery     → Query battery level
+  /controller/set_mode   → Switch control modes
+
+ACTIONS (long tasks):
+  /robot/walk_to         → Walk to a target pose
+  /robot/pick_object     → Execute a pick-and-place
+  /robot/stand_up        → Stand up from sitting/fallen
+  /robot/wave            → Execute a waving gesture
+```
+
+:::info Design Principle
+When in doubt, start with a **topic**. Topics are the most flexible pattern — any number of nodes can publish or subscribe, and the system remains loosely coupled. Only use services and actions when you specifically need their request/response or feedback semantics.
+:::
+
+---
+
+## 3.6 Timers and the Event Loop
+
+Many nodes need to perform work at a fixed rate — a control loop that runs at 1000 Hz, a status reporter that logs every 5 seconds. ROS 2 **timers** handle this:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+import math
+
+
+class JointStatePublisher(Node):
+    """Publishes simulated joint states at a fixed rate."""
+
+    def __init__(self):
+        super().__init__('joint_state_publisher')
+
+        self.publisher = self.create_publisher(JointState, '/joint_states', 10)
+
+        # 50 Hz control loop
+        self.timer = self.create_timer(0.02, self.publish_joint_states)
+
+        self.joint_names = [
+            'left_hip_pitch', 'left_hip_roll', 'left_hip_yaw',
+            'left_knee_pitch',
+            'left_ankle_pitch', 'left_ankle_roll',
+            'right_hip_pitch', 'right_hip_roll', 'right_hip_yaw',
+            'right_knee_pitch',
+            'right_ankle_pitch', 'right_ankle_roll',
+        ]
+
+        self.t = 0.0
+        self.get_logger().info(
+            f'Publishing {len(self.joint_names)} joint states at 50 Hz'
+        )
+
+    def publish_joint_states(self):
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = self.joint_names
+
+        # Simulate a simple standing posture with slight oscillation
+        msg.position = [
+            0.1 * math.sin(self.t),     # left_hip_pitch
+            0.0,                          # left_hip_roll
+            0.0,                          # left_hip_yaw
+            -0.2 * math.sin(self.t),     # left_knee_pitch
+            0.1 * math.sin(self.t),      # left_ankle_pitch
+            0.0,                          # left_ankle_roll
+            0.1 * math.sin(self.t),      # right_hip_pitch (in phase)
+            0.0,                          # right_hip_roll
+            0.0,                          # right_hip_yaw
+            -0.2 * math.sin(self.t),     # right_knee_pitch
+            0.1 * math.sin(self.t),      # right_ankle_pitch
+            0.0,                          # right_ankle_roll
+        ]
+
+        msg.velocity = [0.0] * len(self.joint_names)
+        msg.effort = [0.0] * len(self.joint_names)
+
+        self.publisher.publish(msg)
+        self.t += 0.02
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = JointStatePublisher()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+```
+
+:::warning Timer Accuracy
+Timer callbacks are not hard real-time guarantees in standard ROS 2 (which runs on Linux, not an RTOS). A 1 ms timer will average close to 1 ms but individual firings may jitter by hundreds of microseconds. For truly hard real-time control (like low-level motor current loops), use a real-time kernel and dedicated controller hardware. ROS 2 timers are suitable for control loops up to about 1000 Hz on a well-configured system.
+:::
+
+---
+
+## 3.7 Summary
+
+The four ROS 2 communication primitives give you a complete toolkit for building robot systems:
+
+- **Nodes** are single-purpose processes that form the vertices of the computation graph
+- **Topics** provide asynchronous, one-to-many streaming — the backbone of sensor data flow
+- **Services** provide synchronous request/response for quick operations
+- **Actions** extend services with feedback and cancellation for long-running tasks
+- **Timers** drive periodic computation at fixed rates
+
+Together, these primitives let you decompose a complex humanoid robot system into manageable, testable, replaceable components. In the next chapter, we move from understanding these patterns to building complete ROS 2 Python packages.
+
+---
+
+## Exercises
+
+### Review Questions
+
+1. **Explain** why ROS 2 decomposes robot software into many small nodes rather than one monolithic program. What are the advantages and potential disadvantages?
+
+2. What is the difference between a topic and a service? Give two specific humanoid robotics scenarios where you would choose one over the other.
+
+3. An action provides three things that a service does not: goal management, feedback, and cancellation. Why are all three important for a task like "walk to position (3, 5)"?
+
+4. **Draw** the computation graph (nodes, topics, services) for a system that: reads camera images, detects people, speaks a greeting (via a text-to-speech service), and tracks people by moving the robot's head (via joint commands).
+
+5. What happens if a publisher publishes messages on a topic but no subscriber exists? Does the publisher block? Do messages accumulate?
+
+### Hands-On
+
+6. **Publisher/Subscriber Pair**: Implement the `ImuPublisher` and `TiltDetector` from this chapter. Run them in two terminals and adjust the simulated sway amplitude until the tilt detector triggers a warning.
+
+7. **Service Exercise**: Create a service that accepts a joint name (string) and returns a random angle (simulating a sensor reading). Write both the server and a client that queries three different joints.
+
+8. **Action Exercise**: Modify the `WalkServer` to support cancellation. Send a walking goal from the client, then cancel it after 3 steps. Verify that the server reports the cancellation.
+
+9. **Combined System**: Build a mini-system with three nodes: (a) a joint state publisher, (b) a joint limit checker that subscribes to joint states and publishes warnings on a `/joint_warnings` topic, and (c) a logger node that subscribes to warnings and prints them. Run all three and verify the pipeline works.

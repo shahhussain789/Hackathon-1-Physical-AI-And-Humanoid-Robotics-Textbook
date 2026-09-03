@@ -1,0 +1,260 @@
+/* ── Toggle button ── */
+.chatToggle {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--ifm-color-primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 16px rgba(0, 0, 0, 0.22);
+  z-index: 1100;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.chatToggle:hover {
+  transform: scale(1.07);
+  box-shadow: 0 5px 22px rgba(0, 0, 0, 0.28);
+}
+
+/* ── Chat panel — always stays inside viewport ── */
+.chatPanel {
+  position: fixed;
+  /* Anchored to bottom-right, but capped so header never hides above navbar */
+  bottom: 76px;
+  right: 20px;
+  top: 64px;          /* ← key fix: respects navbar height          */
+  width: 340px;
+  max-height: calc(100vh - 140px);
+  background: var(--ifm-background-color);
+  border: 1px solid rgba(128, 128, 128, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (max-width: 480px) {
+  .chatPanel {
+    width: calc(100vw - 16px);
+    right: 8px;
+    bottom: 72px;
+    top: 60px;
+  }
+}
+
+/* ── Header — always visible at top of panel ── */
+.chatHeader {
+  flex-shrink: 0;          /* never squish the header */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--ifm-color-primary);
+  color: #fff;
+}
+
+.chatTitle {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.chatSubtitle {
+  font-size: 0.68rem;
+  opacity: 0.82;
+}
+
+.closeBtn {
+  background: rgba(255,255,255,0.15);
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  line-height: 1;
+  transition: background 0.15s ease;
+}
+
+.closeBtn:hover {
+  background: rgba(255,255,255,0.28);
+}
+
+/* ── Messages — scrollable area, fills remaining height ── */
+.messages {
+  flex: 1;
+  min-height: 0;         /* ← crucial: lets flex child scroll */
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messages::-webkit-scrollbar {
+  width: 4px;
+}
+.messages::-webkit-scrollbar-thumb {
+  background: rgba(128,128,128,0.25);
+  border-radius: 4px;
+}
+
+/* ── Message bubbles ── */
+.message {
+  max-width: 90%;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: 0.83rem;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.message pre {
+  margin: 5px 0;
+  padding: 7px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.06);
+  overflow-x: auto;
+  font-size: 0.76rem;
+}
+
+[data-theme='dark'] .message pre {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.userMsg {
+  align-self: flex-end;
+  background: var(--ifm-color-primary);
+  color: #fff;
+}
+
+.botMsg {
+  align-self: flex-start;
+  background: var(--ifm-background-surface-color, #f0f0f5);
+  color: var(--ifm-font-color-base);
+}
+
+[data-theme='dark'] .botMsg {
+  background: #1e1e3a;
+}
+
+/* ── Selected text badge ── */
+.selectedTextBadge {
+  font-size: 0.68rem;
+  padding: 3px 7px;
+  background: rgba(108, 92, 231, 0.1);
+  border-radius: 5px;
+  margin-bottom: 5px;
+  color: var(--ifm-color-primary);
+  font-style: italic;
+  max-height: 48px;
+  overflow: hidden;
+}
+
+/* ── Typing indicator ── */
+.typing {
+  align-self: flex-start;
+  padding: 8px 11px;
+  font-size: 0.8rem;
+  color: var(--ifm-color-emphasis-500);
+  font-style: italic;
+}
+
+/* ── Input area ── */
+.inputArea {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  padding: 9px 12px;
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+.chatInput {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: 20px;
+  font-size: 0.83rem;
+  background: var(--ifm-background-color);
+  color: var(--ifm-font-color-base);
+  outline: none;
+  transition: border-color 0.18s ease;
+}
+
+.chatInput:focus {
+  border-color: var(--ifm-color-primary);
+}
+
+.sendBtn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--ifm-color-primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+
+.sendBtn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* ── Selection bar ── */
+.selectionBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: rgba(108, 92, 231, 0.07);
+  border-top: 1px solid rgba(128, 128, 128, 0.1);
+  font-size: 0.73rem;
+  color: var(--ifm-color-primary);
+}
+
+.selectionText {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.clearSelection {
+  background: none;
+  border: none;
+  color: var(--ifm-color-primary);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 1px;
+  opacity: 0.7;
+}
+
+.clearSelection:hover {
+  opacity: 1;
+}
+
+/* ── Welcome screen ── */
+.welcome {
+  text-align: center;
+  padding: 16px;
+  color: var(--ifm-color-emphasis-500);
+  font-size: 0.81rem;
+  line-height: 1.6;
+}
