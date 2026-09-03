@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunkhumanoid_ai_book=globalThis.webpackChunkhumanoid_ai_book||[]).push([[3053],{9203(o){o.exports=JSON.parse('{"metadata":{"permalink":"/Hackathon-1-Physical-AI-And-Humanoid-Robotics-Textbook/blog","page":1,"postsPerPage":10,"totalPages":1,"totalCount":4,"blogDescription":"Blog","blogTitle":"Blog"}}')}}]);
