@@ -48,7 +48,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           // TODO: Replace with actual GitHub edit URL
-          editUrl: 'https://github.com/shahhussain789/humanoid-ai-book/tree/main/',
+          editUrl: 'https://github.com/shahhussain789/Hackathon-1-Physical-AI-And-Humanoid-Robotics-Textbook/tree/main/',
           showLastUpdateTime: true,
         },
         blog: {
@@ -58,7 +58,7 @@ const config: Config = {
             xslt: true,
           },
           // TODO: Replace with actual GitHub edit URL
-          editUrl: 'https://github.com/shahhussain789/humanoid-ai-book/tree/main/',
+          editUrl: 'https://github.com/shahhussain789/Hackathon-1-Physical-AI-And-Humanoid-Robotics-Textbook/tree/main/',
           // Useful options to enforce blogging best practices
           onInlineTags: 'warn',
           onInlineAuthors: 'warn',
@@ -94,7 +94,7 @@ const config: Config = {
         },
         {to: '/blog', label: 'Updates', position: 'left'},
         {
-          href: 'https://github.com/shahhussain789/humanoid-ai-book',
+          href: 'https://github.com/shahhussain789/Hackathon-1-Physical-AI-And-Humanoid-Robotics-Textbook',
           label: 'GitHub',
           position: 'right',
         },
@@ -146,7 +146,7 @@ const config: Config = {
             },
             {
               label: 'GitHub',
-              href: 'https://github.com/shahhussain789/humanoid-ai-book',
+              href: 'https://github.com/shahhussain789/Hackathon-1-Physical-AI-And-Humanoid-Robotics-Textbook',
             },
             {
               label: 'ROS 2 Discourse',
