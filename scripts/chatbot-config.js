@@ -1,3 +1,1 @@
-// Configure the RAG Chatbot API URL
-// Change this to your deployed FastAPI backend URL
-window.__CHATBOT_API_URL = "http://localhost:8000";
+window.__GROQ_API_KEY = "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";
