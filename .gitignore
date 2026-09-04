@@ -116,3 +116,9 @@ build/
 
 # Keep empty directories with placeholder
 !.gitkeep
+
+# Secret / API key files — never commit these
+Groq api.txt
+api key.txt
+chatbot-api/.env
+static/scripts/chatbot-config.js

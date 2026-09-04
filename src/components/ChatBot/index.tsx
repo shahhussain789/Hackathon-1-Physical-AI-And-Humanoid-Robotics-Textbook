@@ -1,24 +1,80 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import styles from './styles.module.css';
+import { GROQ_MODEL } from './config';
 
-const API_URL = typeof window !== 'undefined'
-  ? (window as any).__CHATBOT_API_URL || 'http://localhost:8000'
-  : 'http://localhost:8000';
+function getGroqApiKey(): string {
+  if (typeof window === 'undefined') return '';
+  return (window as any).__GROQ_API_KEY || '';
+}
+
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
+const SYSTEM_PROMPT = `You are an expert AI tutor for the "Physical AI & Humanoid Robotics" textbook. Your job is to help students understand the course content clearly and concisely.
+
+## About This Textbook
+
+This textbook teaches students how to design, simulate, and deploy humanoid robots using real-world tools. It bridges digital AI with the physical world through 4 modules:
+
+### Module 1: The Robotic Nervous System (ROS 2)
+- ROS 2 architecture: nodes, topics, services, actions
+- Building ROS 2 packages with Python (rclpy)
+- URDF (Unified Robot Description Format) for describing humanoid robot bodies
+- Launch files and parameter management
+- Bridging Python AI agents to ROS 2 controllers
+- Publisher/subscriber patterns for robot communication
+
+### Module 2: The Digital Twin (Gazebo & Unity)
+- Gazebo simulation environment setup and physics simulation
+- Simulating gravity, collisions, and rigid body dynamics
+- URDF and SDF robot description formats
+- Sensor simulation: LiDAR, Depth Cameras (RealSense), IMUs
+- Unity for high-fidelity rendering and human-robot interaction
+- Building virtual environments for robot testing before real hardware
+
+### Module 3: The AI-Robot Brain (NVIDIA Isaac)
+- NVIDIA Isaac Sim: photorealistic simulation and synthetic data generation
+- Isaac ROS: hardware-accelerated perception pipeline
+- Visual SLAM (VSLAM) for robot localization and mapping
+- Nav2: path planning for bipedal humanoid movement
+- Sim-to-real transfer techniques
+- Reinforcement learning for robot control
+
+### Module 4: Vision-Language-Action (VLA)
+- Voice-to-Action: Using OpenAI Whisper for speech recognition and voice commands
+- Cognitive Planning: Using LLMs to translate natural language ("Clean the room") into ROS 2 action sequences
+- Vision-Language-Action models for end-to-end robot control
+- Multi-modal interaction: speech, gesture, vision combined
+- Capstone Project: Autonomous Humanoid — robot receives voice command, plans path, navigates obstacles, identifies object with computer vision, and manipulates it
+
+## Key Technologies Covered
+- **Python** — primary programming language
+- **ROS 2 (Humble/Iron)** — robot middleware framework
+- **Gazebo** — physics simulation
+- **Unity** — high-fidelity rendering
+- **NVIDIA Isaac Sim** — AI-powered simulation platform
+- **PyTorch** — deep learning framework
+- **NumPy** — scientific computing
+- **OpenAI Whisper** — speech recognition
+- **LLMs** — for cognitive planning and natural language understanding
+
+## Hardware Context
+- RTX 4070 Ti+ GPU required for Isaac Sim (24GB VRAM ideal)
+- NVIDIA Jetson Orin Nano — edge AI deployment
+- Intel RealSense D435i — depth camera with IMU
+- Unitree Go2/G1 — robot hardware options
+
+## Your Role
+- Answer questions about any of the 4 modules clearly
+- Explain technical concepts with examples and code snippets when helpful
+- If the student selects text from the book, explain or expand on that specific passage
+- Keep answers focused and educational
+- If asked something unrelated to robotics/AI/this course, politely redirect to the textbook topics
+- Use markdown formatting: **bold** for key terms, code blocks for code, bullet points for lists`;
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   selectedText?: string;
-}
-
-function getSessionId(): string {
-  if (typeof window === 'undefined') return '';
-  let id = sessionStorage.getItem('chat_session_id');
-  if (!id) {
-    id = crypto.randomUUID();
-    sessionStorage.setItem('chat_session_id', id);
-  }
-  return id;
 }
 
 function MarkdownContent({ text }: { text: string }): ReactNode {
@@ -60,18 +116,15 @@ export default function ChatBot(): ReactNode {
 
   useEffect(() => { scrollToBottom(); }, [messages, streamingContent]);
 
-  // Close chatbot when clicking outside the panel or toggle button
+  // Close chatbot when clicking outside
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       const insidePanel = chatPanelRef.current?.contains(target);
       const insideToggle = toggleBtnRef.current?.contains(target);
-      if (!insidePanel && !insideToggle) {
-        setIsOpen(false);
-      }
+      if (!insidePanel && !insideToggle) setIsOpen(false);
     };
-    // Small delay so the toggle-open click doesn't immediately close
     const timer = setTimeout(() => {
       document.addEventListener('mousedown', handleClickOutside);
     }, 100);
@@ -81,6 +134,7 @@ export default function ChatBot(): ReactNode {
     };
   }, [isOpen]);
 
+  // Selected text from page
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
     if (!selection) return;
@@ -103,10 +157,13 @@ export default function ChatBot(): ReactNode {
     const text = input.trim();
     if (!text || loading) return;
 
+    const currentSelection = selectedText;
+    setSelectedText('');
+
     const userMsg: Message = {
       role: 'user',
       content: text,
-      selectedText: selectedText || undefined,
+      selectedText: currentSelection || undefined,
     };
 
     setMessages(prev => [...prev, userMsg]);
@@ -114,23 +171,43 @@ export default function ChatBot(): ReactNode {
     setLoading(true);
     setStreamingContent('');
 
-    const currentSelection = selectedText;
-    setSelectedText('');
+    // Build message history for context
+    const historyMessages = messages.slice(-10).map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    // Build user message content (include selected text if any)
+    const userContent = currentSelection
+      ? `I selected this text from the book:\n\n"${currentSelection}"\n\nMy question: ${text}`
+      : text;
+
+    const requestMessages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...historyMessages,
+      { role: 'user', content: userContent },
+    ];
 
     try {
-      const response = await fetch(`${API_URL}/api/chat/stream`, {
+      const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getGroqApiKey()}`,
+        },
         body: JSON.stringify({
-          message: text,
-          session_id: getSessionId(),
-          selected_text: currentSelection || null,
+          model: GROQ_MODEL,
+          messages: requestMessages,
           stream: true,
+          max_completion_tokens: 2048,
+          temperature: 1,
+          reasoning_effort: 'medium',
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error?.message || `Groq API error: ${response.status}`);
       }
 
       const reader = response.body?.getReader();
@@ -143,48 +220,33 @@ export default function ChatBot(): ReactNode {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split('\n');
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            fullContent += data;
-            setStreamingContent(fullContent);
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              fullContent += delta;
+              setStreamingContent(fullContent);
+            }
+          } catch {
+            // skip malformed chunk
           }
         }
       }
 
       setMessages(prev => [...prev, { role: 'assistant', content: fullContent }]);
       setStreamingContent('');
-    } catch (err) {
-      try {
-        const response = await fetch(`${API_URL}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: text,
-            session_id: getSessionId(),
-            selected_text: currentSelection || null,
-          }),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
-        } else {
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: 'Sorry, I couldn\'t connect to the chatbot API. Make sure the backend is running at ' + API_URL,
-          }]);
-        }
-      } catch {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: 'Sorry, I couldn\'t connect to the chatbot API. Make sure the backend is running at ' + API_URL,
-        }]);
-      }
+    } catch (err: any) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `❌ Error: ${err.message || 'Failed to connect to Groq API. Check your API key.'}`,
+      }]);
     } finally {
       setLoading(false);
     }
@@ -224,8 +286,7 @@ export default function ChatBot(): ReactNode {
               <div key={i}>
                 {msg.selectedText && (
                   <div className={styles.selectedTextBadge}>
-                    📝 "{msg.selectedText.slice(0, 120)}
-                    {msg.selectedText.length > 120 ? '...' : ''}"
+                    📝 "{msg.selectedText.slice(0, 120)}{msg.selectedText.length > 120 ? '...' : ''}"
                   </div>
                 )}
                 <div className={`${styles.message} ${msg.role === 'user' ? styles.userMsg : styles.botMsg}`}>
@@ -251,9 +312,7 @@ export default function ChatBot(): ReactNode {
             <div className={styles.selectionBar}>
               <span>📝</span>
               <span className={styles.selectionText}>{selectedText}</span>
-              <button className={styles.clearSelection} onClick={() => setSelectedText('')}>
-                ✕
-              </button>
+              <button className={styles.clearSelection} onClick={() => setSelectedText('')}>✕</button>
             </div>
           )}
 

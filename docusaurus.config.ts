@@ -28,7 +28,7 @@ const config: Config = {
 
   scripts: [
     {
-      src: '/scripts/chatbot-config.js',
+      src: '/Hackathon-1-Physical-AI-And-Humanoid-Robotics-Textbook/scripts/chatbot-config.js',
       async: false,
     },
   ],
